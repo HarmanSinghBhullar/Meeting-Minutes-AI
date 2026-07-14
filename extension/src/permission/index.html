@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Microphone access</title>
+  </head>
+  <body>
+    <!--
+      This page exists to solve a specific MV3 problem.
+
+      The offscreen document records the microphone, but it cannot *ask* for
+      microphone permission: it has no user-visible surface, so Chrome will not
+      show it a prompt. The permission has to be granted in a real extension page
+      first, and once granted it applies to the extension's origin — including
+      the offscreen document.
+
+      So we open this page once, get the grant, and close it. Without it,
+      getUserMedia in the offscreen document fails and only the remote
+      participants get recorded, which is a confusing bug to chase.
+    -->
+    <h1>Allow microphone access</h1>
+    <p>Meeting Intelligence needs your microphone so that your own voice is included in the transcript.</p>
+    <button id="grant" type="button">Allow microphone</button>
+    <script type="module" src="./permission.ts"></script>
+  </body>
+</html>

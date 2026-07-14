@@ -1,0 +1,29 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+
+# Editors
+.idea/
+.vscode/
+
+# Local data (audio blobs, vector store, model cache)
+storage/
+chroma/
+models/
+
+# Evaluation fixtures contain real meeting audio — never commit
+eval/datasets/

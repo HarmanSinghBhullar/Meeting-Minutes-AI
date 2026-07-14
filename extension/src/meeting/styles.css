@@ -1,0 +1,172 @@
+:root {
+  --text: #1f2328;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #1a56db;
+  --warn: #b45309;
+  --warn-bg: #fffbeb;
+  --quote-bg: #f6f8fa;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  font: 15px/1.6 system-ui, sans-serif;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+}
+
+h2 {
+  margin: 32px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.summary {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 16px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.error {
+  color: #b91c1c;
+}
+
+/* --- Minutes items --- */
+
+.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* An item the grounding pass could not support. Visibly set apart rather than
+   removed: the reader is told what was caught, which is what earns their trust
+   in everything that was not. */
+.item.ungrounded {
+  padding-left: 12px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-bg);
+}
+
+.item-text {
+  margin: 0 0 4px;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.owner {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.warning {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--warn);
+}
+
+/* The citation control. Deliberately a plain, always-visible link rather than a
+   hover affordance or an icon — checking a claim should not be something the
+   user has to discover. */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+blockquote {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--quote-bg);
+  font-size: 14px;
+}
+
+blockquote p {
+  margin: 0 0 6px;
+}
+
+blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Transcript --- */
+
+.transcript p {
+  margin: 0 0 6px;
+}
+
+.ts {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.speaker {
+  font-weight: 600;
+}
+
+/* An unattributed line must not read like an attributed one. The user is the
+   only one who can fix a wrong name, and they can only do that if the uncertain
+   ones are visible. */
+.speaker.unknown {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --line: #30363d;
+    --accent: #6ea8fe;
+    --warn: #d29922;
+    --warn-bg: #2b2413;
+    --quote-bg: #161b22;
+  }
+
+  body {
+    background: #0d1117;
+  }
+
+  .error {
+    color: #ff7b72;
+  }
+}

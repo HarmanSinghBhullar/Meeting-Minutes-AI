@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Recorder</title>
+  </head>
+  <body>
+    <!--
+      This page is never shown. It exists because an MV3 service worker has no
+      DOM and therefore cannot hold a MediaRecorder, so all audio capture has to
+      happen in an offscreen document. See recorder.ts.
+    -->
+    <script type="module" src="./recorder.ts"></script>
+  </body>
+</html>
