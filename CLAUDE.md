@@ -45,9 +45,12 @@ changes the behaviour, so it never drifts from the code.
 
 Working end to end: audio → ffmpeg → Whisper `large-v3` → attribution
 (DOM speaker timeline for Meet/Zoom/Teams, pyannote fallback otherwise) →
-word-level alignment → attributed segments in Postgres → cited minutes
-(`services/minutes/`, OpenAI + Anthropic providers) → grounding pass. The
-extension records, uploads to the API, and returns minutes on a live meeting.
+word-level alignment → attributed segments in Postgres → translation for
+non-English meetings (`services/translation.py`, batched through the same
+structured-LLM provider as the minutes; writes `Segment.text_en`, never over
+`text`) → cited minutes (`services/minutes/`, OpenAI + Anthropic providers) →
+grounding pass. The extension records, uploads to the API, and returns minutes
+on a live meeting.
 
 Opening the extension's meeting page with no `?id=` renders a **dashboard**
 (`meeting/Dashboard.tsx`) listing every meeting with open / rename / delete /
@@ -70,7 +73,6 @@ to "Unknown".
 
 Not yet built:
 
-- Translation — `workers/pipeline.run_translate` raises `NotImplementedError`.
 - RAG — `services/rag/` and the `INDEX` job are stubbed; `api/v1/routes/qa.py`
   returns `501`. It is deliberately last, since Q&A inherits every upstream error.
 

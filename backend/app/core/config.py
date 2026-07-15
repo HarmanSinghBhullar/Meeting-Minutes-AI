@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     #: it can see, so it can run on something cheaper.
     minutes_model: str = Field(default="gpt-5.6", alias="MINUTES_MODEL")
     grounding_model: str = Field(default="gpt-5.6", alias="GROUNDING_MODEL")
+    #: Translation is line-wise transduction, not judgement, so it can run on a
+    #: cheaper/faster model than the extractor without hurting the minutes.
+    translation_model: str = Field(default="gpt-5.6", alias="TRANSLATION_MODEL")
 
     # --- RAG ---
     chroma_dir: Path = Field(default=Path("./chroma"), alias="CHROMA_DIR")

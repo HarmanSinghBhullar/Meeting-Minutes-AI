@@ -40,7 +40,7 @@ from app.services.minutes.extractor import ExtractedItem, extract, summarize
 from app.services.minutes.grounding import verify
 from app.services.transcription.base import TranscriptionResult
 from app.services.transcription.faster_whisper_provider import FasterWhisperProvider
-from app.services.translation import needs_translation
+from app.services.translation import needs_translation, translate_segments
 from app.workers.queue import enqueue
 
 logger = logging.getLogger(__name__)
@@ -333,12 +333,35 @@ def _resolve_speaker(
 
 
 def run_translate(db: Session, meeting_id: uuid.UUID) -> None:
-    """Translate a non-English transcript into English.
+    """Translate a non-English transcript into English, then queue the minutes.
 
-    TODO: translation.translate_segments() over the meeting's segments, then
-    enqueue MINUTES.
+    Writes ``text_en`` onto every segment and hands off to MINUTES, which reads
+    the English text. The original ``text`` is left untouched — it is what the
+    minutes cite.
     """
-    raise NotImplementedError("Translation: not yet implemented.")
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is None:
+        raise ValueError(f"Meeting {meeting_id} does not exist.")
+
+    segments = list(
+        db.execute(
+            select(Segment).where(Segment.meeting_id == meeting_id).order_by(Segment.start_ms)
+        ).scalars()
+    )
+    if not segments:
+        raise RuntimeError("Meeting has no transcript to translate.")
+
+    # ``source_language`` was written by the transcribe stage. Fall back to the
+    # segments' own language for the (unusual) case where it was not recorded, so
+    # the model still gets told what it is reading.
+    language = meeting.source_language or segments[0].language or "unknown"
+    translate_segments(segments, source_language=language, model=settings.translation_model)
+
+    db.commit()
+    logger.info("Translated %d segments for meeting %s", len(segments), meeting_id)
+
+    enqueue(db, meeting_id, JobType.MINUTES)
+    db.commit()
 
 
 def run_minutes(db: Session, meeting_id: uuid.UUID) -> None:
