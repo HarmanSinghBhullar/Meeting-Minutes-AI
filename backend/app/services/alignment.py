@@ -47,22 +47,35 @@ def _speaker_for_word(word: Word, turns: list[SpeakerTurn]) -> SpeakerTurn | Non
     A word is assigned to the turn it overlaps most, rather than the turn
     containing its midpoint: the DOM's active-speaker indicator lags the audio
     slightly, and overlap is more forgiving of that than a point test.
+
+    Presenter turns are a fallback, not a peer. Someone screen-sharing a video
+    produces a single turn spanning the whole share, so if it competed on overlap
+    it would swallow every word — including ones a real speaker briefly said over
+    the top. So we resolve against genuine *speaking* turns first and only consult
+    the presenter when no one was shown speaking at all.
     """
     start_ms = int(word.start * 1000)
     end_ms = int(word.end * 1000)
 
-    best: SpeakerTurn | None = None
-    best_overlap = 0
+    def best_overlapping(candidates: list[SpeakerTurn]) -> SpeakerTurn | None:
+        best: SpeakerTurn | None = None
+        best_overlap = 0
+        for turn in candidates:
+            if turn.start_ms >= end_ms:
+                break  # turns are sorted; nothing later can overlap
+            overlap = min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = turn
+        return best
 
-    for turn in turns:
-        if turn.start_ms >= end_ms:
-            break  # turns are sorted; nothing later can overlap
-        overlap = min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms)
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best = turn
+    speaking = [t for t in turns if t.source is not SpeakerSource.PRESENTER]
+    match = best_overlapping(speaking)
+    if match is not None:
+        return match
 
-    return best
+    presenting = [t for t in turns if t.source is SpeakerSource.PRESENTER]
+    return best_overlapping(presenting)
 
 
 def align(

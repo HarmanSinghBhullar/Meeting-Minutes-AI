@@ -135,6 +135,10 @@ def post_speaker_events(
                 meeting_id=meeting_id,
                 display_name=event.speaker_name,
                 external_ref=event.speaker_external_ref,
+                # The *person* is real regardless of how we noticed them — a name
+                # from the participant list, whether they were speaking or
+                # presenting — so the Speaker is DOM. Only the event carries the
+                # weaker `presenter` provenance.
                 source=SpeakerSource.DOM,
             )
             db.add(speaker)
@@ -147,7 +151,7 @@ def post_speaker_events(
                 speaker_id=speaker.id,
                 start_ms=event.start_ms,
                 end_ms=event.end_ms,
-                source=SpeakerSource.DOM,
+                source=event.source,
             )
         )
 

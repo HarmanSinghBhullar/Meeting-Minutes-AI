@@ -40,6 +40,22 @@ h2 {
   font-size: 16px;
 }
 
+/* Attendance and the point-wise minutes: both plain lists under an h2. */
+.attendance,
+.minutes-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.attendance li,
+.minutes-list li {
+  margin: 0 0 6px;
+}
+
+.minutes-list li {
+  font-size: 16px;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
@@ -47,6 +63,117 @@ h2 {
 
 .error {
   color: #b91c1c;
+}
+
+/* --- Back link --- */
+
+.back {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.back a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.back a:hover {
+  text-decoration: underline;
+}
+
+/* --- Dashboard --- */
+
+.meeting-list {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meeting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.meeting-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.meeting-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.meeting-title:hover {
+  text-decoration: underline;
+}
+
+.meeting-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.meeting-actions {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.link.danger {
+  color: #b91c1c;
+}
+
+.rename-form {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--quote-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--quote-bg);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge.ready {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.badge.working {
+  color: var(--accent);
+}
+
+.badge.failed {
+  color: var(--warn);
+  background: var(--warn-bg);
 }
 
 /* --- Minutes items --- */
@@ -168,5 +295,14 @@ blockquote p:last-child {
 
   .error {
     color: #ff7b72;
+  }
+
+  .link.danger {
+    color: #ff7b72;
+  }
+
+  .badge.ready {
+    color: #7ee2a8;
+    background: #123020;
   }
 }

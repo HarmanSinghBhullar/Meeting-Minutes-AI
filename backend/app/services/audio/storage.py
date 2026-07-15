@@ -12,6 +12,7 @@ survive a browser crash with only the last few seconds lost.
 The interface is deliberately narrow so an S3 backend can replace it later.
 """
 
+import shutil
 import uuid
 from pathlib import Path
 
@@ -21,6 +22,17 @@ from app.db.models.enums import Track
 
 def _meeting_dir(meeting_id: uuid.UUID) -> Path:
     return settings.storage_dir / str(meeting_id)
+
+
+def delete_meeting(meeting_id: uuid.UUID) -> None:
+    """Remove every stored file for a meeting. Idempotent.
+
+    Called when a meeting is deleted from the dashboard: the database row cascades
+    away on its own, but the audio blobs live on disk and would otherwise leak.
+    """
+    directory = _meeting_dir(meeting_id)
+    if directory.is_dir():
+        shutil.rmtree(directory)
 
 
 def track_path(meeting_id: uuid.UUID, track: Track, suffix: str = ".webm") -> Path:

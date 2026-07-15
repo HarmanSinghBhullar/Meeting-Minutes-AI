@@ -81,6 +81,11 @@ export function App(): JSX.Element {
     });
   }
 
+  function openDashboard(): void {
+    // No id → the meeting page renders the dashboard of every meeting.
+    void chrome.tabs.create({ url: chrome.runtime.getURL('src/meeting/index.html') });
+  }
+
   return (
     <main style={{ padding: 16 }}>
       <h1 style={{ fontSize: 16, margin: '0 0 12px' }}>Meeting Intelligence</h1>
@@ -124,6 +129,14 @@ export function App(): JSX.Element {
       )}
 
       {error && <p style={{ fontSize: 12, color: '#d93025' }}>{error}</p>}
+
+      <button
+        type="button"
+        onClick={openDashboard}
+        style={{ width: '100%', padding: 8, marginTop: 8 }}
+      >
+        Manage all meetings
+      </button>
 
       {meetings.length > 0 && (
         <>

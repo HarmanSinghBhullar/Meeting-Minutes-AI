@@ -79,6 +79,7 @@ export async function postSpeakerEvents(
       speaker_external_ref: e.speakerExternalRef,
       start_ms: e.startMs,
       end_ms: e.endMs,
+      ...(e.source ? { source: e.source } : {}),
     })),
   });
 }
@@ -100,6 +101,33 @@ export async function listMeetings(limit = 20): Promise<Meeting[]> {
 
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   return toMeeting(await get<RawMeeting>(`/meetings/${meetingId}`));
+}
+
+/** Rename a meeting. Returns the updated meeting. */
+export async function renameMeeting(meetingId: string, title: string): Promise<Meeting> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+  return toMeeting((await res.json()) as RawMeeting);
+}
+
+/** Permanently delete a meeting and its audio. A 404 is treated as success —
+ *  the goal state (gone) is already true. */
+export async function deleteMeeting(meetingId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`delete failed: ${res.status}`);
+}
+
+/** Re-run minutes generation over the existing transcript. Queues a new job and
+ *  writes a new minutes version rather than overwriting the old one. */
+export async function regenerateMinutes(meetingId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}/minutes/regenerate`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`regenerate failed: ${res.status}`);
 }
 
 export async function getTranscript(meetingId: string): Promise<TranscriptSegment[]> {

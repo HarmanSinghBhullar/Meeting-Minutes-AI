@@ -252,19 +252,27 @@ def _deduplicate(items: list[ExtractedItem]) -> list[ExtractedItem]:
 
 
 def summarize(segments: list[Segment], *, model: str | None = None) -> str | None:
-    """Write the prose overview that sits above the structured items."""
+    """Write the point-wise minutes that sit above the structured items.
+
+    Returned as one string with each point on its own line — the storage column
+    is a plain string, and the viewer splits on the newlines to render bullets.
+    Points rather than prose because minutes are read to be scanned: "where did
+    this land?" is answered faster by a short list than by a paragraph.
+    """
     if not segments:
         return None
 
     model = model or settings.minutes_model
 
-    # The summary reads the whole meeting, but only its text — it is the one part
+    # The minutes read the whole meeting, but only its text — it is the one part
     # of the output that is allowed to generalise, because nobody acts on it.
     result = get_provider().complete(
         system=(
-            "Summarise this meeting in one short paragraph: what it was about and "
-            "where it landed. Do not list action items — they are captured "
-            "separately. Do not invent outcomes that were not reached."
+            "Write the minutes of this meeting as a short list of concise points: "
+            "what was discussed and where it landed, most important first. Return "
+            "3-6 points, each a single short sentence. Do not list action items — "
+            "they are captured separately. Do not invent outcomes that were not "
+            "reached."
         ),
         prompt=render_transcript(segments),
         schema=SummaryResult,
@@ -273,4 +281,8 @@ def summarize(segments: list[Segment], *, model: str | None = None) -> str | Non
         max_tokens=MAX_TOKENS,
     )
 
-    return result.summary if result else None
+    if result is None:
+        return None
+
+    points = [p.strip() for p in result.points if p.strip()]
+    return "\n".join(points) if points else None

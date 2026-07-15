@@ -103,8 +103,9 @@ CTranslate2 resolves cuBLAS with a plain `LoadLibrary` that only searches `PATH`
 ## Status
 
 **Working end to end:** audio → ffmpeg → `large-v3` on the GPU → word-level
-alignment → attributed segments in Postgres → cited minutes → grounding pass.
-The two pieces this README once listed as pending are now in place:
+alignment → attributed segments in Postgres → point-wise cited minutes →
+grounding pass. The two pieces this README once listed as pending are now in
+place:
 
 - The DOM speaker timeline — `extension/src/content/adapters/{meet,zoom,teams}.ts`
   producing the active-speaker events, and `services/attribution/dom_timeline.py`
@@ -112,6 +113,23 @@ The two pieces this README once listed as pending are now in place:
   fallback for unsupported platforms.
 - Minutes — `backend/app/services/minutes/` (extraction + grounding, with OpenAI
   and Anthropic providers behind a config switch).
+
+Attribution has two refinements beyond the basic timeline. The Meet adapter
+**identifies the local user** — via `data-self-name` or Meet's "(You)" marker —
+so their microphone track is labelled with their real name (tagged `Name (You)`
+in the UI) instead of an invented "You". And it emits **presenter turns** for
+screen-shared audio: a played video lights up no active-speaker indicator, so the
+audio is attributed to whoever is sharing, ranked below any genuine speaking turn
+so a live comment over the share still wins. Both rest on obfuscated Meet
+selectors — when remote speakers regress to "Unknown", re-run `__meetCalibrate()`
+(in `adapters/meet.ts`) on a live call and paste in the reported selector.
+
+**Reviewing and managing meetings.** The extension's meeting page doubles as a
+dashboard: opened with no `?id=` it lists every recording with its status, and
+each row can be opened, **renamed**, **deleted** (row + audio), or have its
+**minutes regenerated**. A single meeting shows its point-wise minutes under a
+`Minutes` heading, attendees under `Attendance`, and every claim one click from
+the transcript line behind it.
 
 The extension's upload path has been exercised against the API on a live
 recording, and the transcript-only path is still verifiable in isolation with

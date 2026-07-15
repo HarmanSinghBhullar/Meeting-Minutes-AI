@@ -3,7 +3,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.db.models.enums import JobStatus, JobType, Platform, SpeakerSource, Track
 
@@ -44,12 +46,24 @@ class SpeakerEventIn(BaseModel):
     speaker_name: str
     start_ms: int
     end_ms: int
+    #: How the name was determined. ``dom`` (the default) is the active-speaker
+    #: signal; ``presenter`` marks audio attributed to the screen-sharer, which
+    #: alignment ranks below any real speaking turn.
+    source: SpeakerSource = SpeakerSource.DOM
 
 
 class SpeakerEventBatch(BaseModel):
     """A batch of active-speaker events."""
 
     events: list[SpeakerEventIn]
+
+
+class MeetingUpdate(BaseModel):
+    """User-editable meeting fields. Rename is the only one for now."""
+
+    #: Stripped before length-checking, so a whitespace-only name is rejected
+    #: rather than silently stored as an empty title.
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)]
 
 
 class MeetingFinalize(BaseModel):

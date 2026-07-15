@@ -117,6 +117,54 @@ def test_segments_with_no_matching_turn_fall_back_to_the_default() -> None:
     assert result[0].speaker_source is SpeakerSource.UNKNOWN
 
 
+def test_presenter_turn_names_screen_share_audio() -> None:
+    """A screen-share with audio has no speaking signal, so the sharer names it.
+
+    This is the "played video" case: nobody is shown speaking, but the UI does say
+    who is presenting, and attributing the audio to them beats "Unknown".
+    """
+    segment = TranscribedSegment(
+        start=0.0,
+        end=1.0,
+        text=" welcome to the workshop",
+        words=[_word(" welcome to the workshop", 0.0, 1.0)],
+    )
+
+    # One long presenter turn spanning the whole share, and no speaking turn.
+    turns = [SpeakerTurn("Harman", 0, 60_000, SpeakerSource.PRESENTER)]
+
+    result = align([segment], turns)
+
+    assert len(result) == 1
+    assert result[0].speaker_label == "Harman"
+    assert result[0].speaker_source is SpeakerSource.PRESENTER
+
+
+def test_real_speaking_overrides_a_presenter_turn() -> None:
+    """When someone actually speaks over a share, the speaker wins, not the sharer.
+
+    The presenter turn spans everything, so on raw overlap it would swallow the
+    word; it must lose to a genuine speaking turn that also covers it.
+    """
+    segment = TranscribedSegment(
+        start=0.0,
+        end=1.0,
+        text=" quick question",
+        words=[_word(" quick question", 0.0, 1.0)],
+    )
+
+    turns = [
+        SpeakerTurn("Harman", 0, 60_000, SpeakerSource.PRESENTER),  # sharing all along
+        SpeakerTurn("Priya", 0, 1000, SpeakerSource.DOM),  # actually speaking here
+    ]
+
+    result = align([segment], turns)
+
+    assert len(result) == 1
+    assert result[0].speaker_label == "Priya"
+    assert result[0].speaker_source is SpeakerSource.DOM
+
+
 def test_tracks_merge_in_time_order() -> None:
     """The two tracks interleave chronologically; overlapping speech survives."""
     mic = align(

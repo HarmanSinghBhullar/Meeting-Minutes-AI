@@ -28,6 +28,9 @@ export interface SpeakerEvent {
   speakerExternalRef?: string;
   startMs: number;
   endMs: number;
+  /** How the name was determined. Defaults to `dom` (active speaker) on the
+   *  backend; `presenter` marks audio attributed to the screen-sharer instead. */
+  source?: 'dom' | 'presenter';
 }
 
 /** What the content script knows about the meeting when recording starts. */
@@ -50,6 +53,7 @@ export type ExtensionMessage =
   // hold a MediaRecorder (MV3 service workers have no DOM).
   | { type: 'OFFSCREEN_START'; streamId: string; meetingId: string }
   | { type: 'OFFSCREEN_STOP' }
+  | { type: 'OFFSCREEN_GET_STATE' }
 
   // service worker -> content script
   | { type: 'GET_MEETING_CONTEXT' }
@@ -65,11 +69,55 @@ export interface RecordingState {
   startedAt?: number;
 }
 
+/**
+ * The shape every reply to a `sendMessage` takes.
+ *
+ * A listener that returns without replying still *receives* the message, but the
+ * promise `sendMessage` returned rejects. That combination — the work happens,
+ * the caller is told it failed — is how a recording once kept running for ten
+ * minutes after it had been stopped. So replies are mandatory, and typing them
+ * is how we keep them that way.
+ */
+export type Reply<T> = { ok: true; result: T } | { ok: false; error: string };
+
+/** Reply to `OFFSCREEN_GET_STATE`.
+ *
+ *  The offscreen document holds the MediaRecorder, so it — not the service
+ *  worker's `state` variable — is the authority on whether audio is being
+ *  captured. */
+export interface OffscreenState {
+  isRecording: boolean;
+  meetingId?: string;
+}
+
+/** Reply to `OFFSCREEN_STOP`, sent only once every chunk has been uploaded.
+ *
+ *  `failed` is surfaced rather than swallowed: a chunk that never arrived is a
+ *  silent hole in the transcript, and a hole nobody knows about is one nobody
+ *  can account for when the minutes come out short. */
+export interface StopResult {
+  uploaded: number;
+  failed: number;
+}
+
+/** Reply to `RECORDING_STOPPED`: the speaker turns the content script had not
+ *  flushed yet, handed back directly so the service worker can post them before
+ *  it finalizes the meeting. */
+export interface StoppedResult {
+  events: SpeakerEvent[];
+}
+
 /* --- Read models, as returned by the API --- */
 
 /** How a speaker was identified. The UI shows a guessed name differently from a
  *  known one, so the user knows which to double-check. */
-export type SpeakerSource = 'local_track' | 'dom' | 'diarization' | 'manual' | 'unknown';
+export type SpeakerSource =
+  | 'local_track'
+  | 'dom'
+  | 'presenter'
+  | 'diarization'
+  | 'manual'
+  | 'unknown';
 
 export type MinutesItemType =
   | 'decision'

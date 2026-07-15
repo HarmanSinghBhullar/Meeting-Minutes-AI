@@ -90,14 +90,17 @@ export function Meeting({ meetingId }: Props): JSX.Element {
 
   return (
     <main>
+      <p className="back">
+        <a href="index.html">← All meetings</a>
+      </p>
       <header>
         <h1>{meeting.title ?? 'Untitled meeting'}</h1>
         <p className="muted">
           {meeting.startedAt ? new Date(meeting.startedAt).toLocaleString() : 'Date unknown'}
-          {meeting.speakers.length > 0 &&
-            ` · ${meeting.speakers.map((s) => s.displayName).join(', ')}`}
         </p>
       </header>
+
+      {meeting.speakers.length > 0 && <Attendance speakers={meeting.speakers} />}
 
       {/* The error text is on the job row for a reason: "ffmpeg is not installed"
           is something the user can act on, and "failed" is not. */}
@@ -140,7 +143,16 @@ function MinutesView({
 
   return (
     <section>
-      {minutes.summary && <p className="summary">{minutes.summary}</p>}
+      {minutes.summary && (
+        <div>
+          <h2>Minutes</h2>
+          <ul className="minutes-list">
+            {summaryPoints(minutes.summary).map((point, i) => (
+              <li key={i}>{point}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {rejected > 0 && (
         // Surfaced deliberately. The number is evidence the verifier is awake,
@@ -268,7 +280,55 @@ function Transcript({
 
 function speakerName(seg: TranscriptSegment, speakers: Map<string, Speaker>): string {
   if (!seg.speakerId) return 'Unknown speaker';
-  return speakers.get(seg.speakerId)?.displayName ?? 'Unknown speaker';
+  const speaker = speakers.get(seg.speakerId);
+  return speaker ? speakerLabel(speaker) : 'Unknown speaker';
+}
+
+/**
+ * A speaker's name as shown to the reader, tagging the local user with "(You)".
+ *
+ * The one exception is the backend's "You" placeholder — the name it falls back
+ * to when the meeting UI never told it who the local user was. Marking that as
+ * "You (You)" would be nonsense, so the tag is added only when there is a real
+ * name to attach it to.
+ */
+function speakerLabel(speaker: Speaker): string {
+  const isPlaceholder = speaker.displayName.trim().toLowerCase() === 'you';
+  return speaker.isLocalUser && !isPlaceholder
+    ? `${speaker.displayName} (You)`
+    : speaker.displayName;
+}
+
+/** Who was in the meeting, the local user first, each tagged as needed. */
+function Attendance({ speakers }: { speakers: Speaker[] }): JSX.Element {
+  const ordered = [...speakers].sort(
+    (a, b) => Number(b.isLocalUser) - Number(a.isLocalUser),
+  );
+
+  return (
+    <section>
+      <h2>Attendance</h2>
+      <ul className="attendance">
+        {ordered.map((s) => (
+          <li key={s.id}>{speakerLabel(s)}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Split the stored minutes into display points.
+ *
+ * The backend writes one point per line; older meetings may hold a single prose
+ * paragraph, which simply renders as one point. Any leading bullet glyph the
+ * model slipped in is trimmed so it does not double up with the list marker.
+ */
+function summaryPoints(summary: string): string[] {
+  return summary
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-•*]\s*/, '').trim())
+    .filter(Boolean);
 }
 
 function formatTime(ms: number): string {

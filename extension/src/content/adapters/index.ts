@@ -26,6 +26,13 @@ export interface ObservedTurn {
   speakerExternalRef?: string;
   startedAt: number;
   endedAt: number;
+  /**
+   * How the name was arrived at. `dom` (the default) means the UI showed this
+   * person as the active *speaker*; `presenter` means they were *sharing their
+   * screen* while audio played and no one was flagged speaking — a weaker signal
+   * that real speaking overrides during alignment. Absent is treated as `dom`.
+   */
+  source?: 'dom' | 'presenter';
 }
 
 export interface MeetingAdapter {
