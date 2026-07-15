@@ -47,7 +47,7 @@ gold set, every change is a coin flip you cannot evaluate.
 | Queue | Postgres `FOR UPDATE SKIP LOCKED` | Transcription takes minutes, so it cannot run in a request. A broker would buy throughput we don't need — the GPU is the bottleneck |
 | Transcription | `faster-whisper` `large-v3`, int8_float16 | The big model earns its keep on exactly the words minutes are made of: names, products, acronyms |
 | Diarization | `pyannote.audio` (fallback only) | Anonymous clusters; used when there is no DOM timeline |
-| Minutes | Claude, structured output + grounding pass | |
+| Minutes | OpenAI (`gpt-5.6`), structured output + grounding pass | Provider is a one-line switch (`LLM_PROVIDER`); Anthropic is installed and A/B-testable on the eval set |
 | RAG | ChromaDB (phase 2) | Inherits every upstream error, so it goes last |
 
 ## Running it
@@ -103,19 +103,27 @@ CTranslate2 resolves cuBLAS with a plain `LoadLibrary` that only searches `PATH`
 ## Status
 
 **Working end to end:** audio → ffmpeg → `large-v3` on the GPU → word-level
-alignment → attributed segments in Postgres. Verified with
+alignment → attributed segments in Postgres → cited minutes → grounding pass.
+The two pieces this README once listed as pending are now in place:
+
+- The DOM speaker timeline — `extension/src/content/adapters/{meet,zoom,teams}.ts`
+  producing the active-speaker events, and `services/attribution/dom_timeline.py`
+  reading them. Remote speakers get real names, not `unknown`; pyannote stays the
+  fallback for unsupported platforms.
+- Minutes — `backend/app/services/minutes/` (extraction + grounding, with OpenAI
+  and Anthropic providers behind a config switch).
+
+The extension's upload path has been exercised against the API on a live
+recording, and the transcript-only path is still verifiable in isolation with
 `scripts/smoke_transcribe.py`.
 
 **Not yet built:**
 
-- `extension/src/content/adapters/*.ts` — the DOM speaker timeline. Until it
-  exists, remote speakers come out as `unknown` (or as anonymous pyannote
-  clusters, if you enable the fallback). This is the accuracy advantage and the
-  next piece to build.
-- The extension's upload path has never been exercised against the API.
-- `backend/app/services/minutes/` — extraction and grounding.
-- RAG (`services/rag/`, `api/v1/routes/qa.py`) is deliberately stubbed until the
-  transcripts underneath it are accurate.
+- Translation. `run_translate` in the pipeline raises `NotImplementedError`, so a
+  non-English transcript does not yet reach the minutes stage.
+- RAG. `services/rag/` (`answer_question`) and the `INDEX` pipeline stage are
+  stubbed, and `api/v1/routes/qa.py` returns `501`. Deliberately last: Q&A
+  inherits every upstream error, so it waits until the transcripts are accurate.
 
 ## Recording consent
 
