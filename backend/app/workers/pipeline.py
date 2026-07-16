@@ -42,6 +42,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.config import settings
 from app.db.models.enums import JobType, SpeakerSource, Track
@@ -65,14 +66,43 @@ from app.workers.queue import enqueue
 logger = logging.getLogger(__name__)
 
 
+def _real_people(meeting_id: uuid.UUID) -> list[ColumnElement[bool]]:
+    """Filters selecting the Speaker rows that stand for an actual human.
+
+    Two kinds of row do not, and both have to go, because both carry a
+    ``display_name`` like ``SPEAKER_02`` that means nothing outside the mapping UI:
+
+    * ``source == DIARIZATION`` — an unnamed cluster. On a *re-run* these are still
+      in the table when this is read: ``_persist_segments`` does not clear them
+      until later in the same job.
+    * ``is_excluded`` — a cluster a human marked as not-a-participant. These are
+      the durable ones. ``_mark_excluded`` sets ``source = MANUAL`` without
+      renaming, and nothing ever deletes them (only DIARIZATION rows are cleared),
+      so ``SPEAKER_02`` outlives every reprocess of the meeting.
+
+    Callers add their own conditions on top; this is the shared floor.
+    """
+    return [
+        Speaker.meeting_id == meeting_id,
+        Speaker.source != SpeakerSource.DIARIZATION,
+        Speaker.is_excluded.is_(False),
+    ]
+
+
 def build_vocabulary_prompt(db: Session, meeting: Meeting) -> str | None:
     """Assemble the ``initial_prompt`` that primes Whisper on this meeting.
 
     Participant names plus the title and agenda. Cheap, and it rescues exactly
     the words that carry the meaning: who, and what thing.
+
+    Only *named* participants — see ``_real_people``. Priming the decoder with
+    "SPEAKER_00, SPEAKER_01" is not a weaker version of this, it is the inverse of
+    it: the prompt is meant to make the model expect the words it is about to
+    hear, and nobody says "speaker zero zero" out loud. It spends the prompt on
+    tokens that cannot appear and biases the decoder toward them.
     """
     names = (
-        db.execute(select(Speaker.display_name).where(Speaker.meeting_id == meeting.id))
+        db.execute(select(Speaker.display_name).where(*_real_people(meeting.id)))
         .scalars()
         .all()
     )
@@ -278,18 +308,22 @@ def _remote_speaker_bound(db: Session, meeting: Meeting) -> int | None:
     ceiling only removes the absurd end of the space. Returns None for an empty
     roster, which leaves pyannote unconstrained — the honest answer when we know
     nothing.
+
+    The count is over ``_real_people`` (minus the local user, whose mic track is
+    never diarized), and the exclusion of *excluded* speakers is the part worth
+    explaining. A cluster someone ignored — hold music, a shared video — really is
+    a distinct voice in the tab track, so it is tempting to keep its seat. But that
+    row survives reprocessing, so counting it means the bound this job passes
+    depends on how many videos were played the *last* time the meeting was
+    processed, loosening the one parameter that governs over-splitting a little
+    further on every re-run. Reprocessing is a repair operation; it should
+    reproduce the first run, not drift from it. The spare seat already covers one
+    such voice, which is the same allowance the first run had.
     """
     roster = db.execute(
         select(func.count())
         .select_from(Speaker)
-        .where(
-            Speaker.meeting_id == meeting.id,
-            Speaker.is_local_user.is_(False),
-            # Clusters left over from an earlier run of this same meeting are not
-            # roster entries, and counting them would inflate the bound every
-            # time a meeting is reprocessed.
-            Speaker.source != SpeakerSource.DIARIZATION,
-        )
+        .where(*_real_people(meeting.id), Speaker.is_local_user.is_(False))
     ).scalar_one()
 
     return roster + 1 if roster else None

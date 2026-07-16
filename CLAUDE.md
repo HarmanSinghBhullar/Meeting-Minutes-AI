@@ -91,6 +91,37 @@ So `pyannote/speaker-diarization-3.1` now attributes every tab track
   from the participant list and is *not* the fragile part. It survives as the
   name source: the candidate list for mapping, and the `max_speakers` bound passed
   to pyannote (`_remote_speaker_bound`: roster + 1, never an exact count).
+- **Only rows that stand for a real person feed Whisper and pyannote**
+  (`_real_people` in `workers/pipeline.py`), which is subtler than it sounds
+  because both inputs are read *before* the same job clears the last run's rows.
+  Two kinds of row have a `display_name` like `SPEAKER_02`: an unmapped cluster
+  (deleted later in the same job) and — the durable one — a cluster someone
+  *ignored*, which `_mark_excluded` moves to `MANUAL` without renaming and nothing
+  ever deletes. Counted, they primed Whisper's `initial_prompt` with "SPEAKER_00"
+  and inflated `max_speakers` on every reprocess. Reprocessing is a repair
+  operation: it must hand both models what the first run did.
+
+**Alignment absorbs the two clocks, not the disagreement.** Whisper's word times
+and pyannote's turn boundaries come from different models and disagree by
+~100–200ms even when they agree about *who* spoke. `services/alignment.py` treats
+that as noise rather than signal, in two tightly-bounded places — both deliberately
+too small to swallow real speech, since over-applying either silently puts one
+person's words in another's mouth:
+
+- `NEAREST_TURN_TOLERANCE_MS` (250): a word landing in the *seam* between two tight
+  turns overlaps neither and used to come out `UNKNOWN` mid-sentence. It now goes to
+  the nearest turn within the tolerance — and a near-miss on a real speaker beats a
+  screen-share `PRESENTER` turn. Past the tolerance it is still `UNKNOWN`: a word in
+  genuine silence is likely a hallucination, and it must not be handed to whoever
+  spoke last.
+- `MIN_RUN_MS` (300): a word or two flipping to a neighbour and straight back is
+  jitter, not a turn. Absorbed only when *enclosed* by one other speaker — duration
+  alone would eat real backchannel. Runs at a segment edge are left alone; there is
+  no enclosure to judge them by.
+
+`align` also sorts turns defensively: both searches stop early on ascending starts,
+so an unsorted timeline would not raise, it would silently attribute everything
+before the first turn to nobody.
 
 **The mapping gate.** A diarized meeting stops after transcription/translation and
 waits: minutes crediting `SPEAKER_01` are not a rough draft, they are a confident

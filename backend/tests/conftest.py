@@ -127,6 +127,18 @@ class SpeakerFactory:
         """An unnamed voice from the diarizer — what the gate is waiting on."""
         return self._add(label, SpeakerSource.DIARIZATION)
 
+    def ignored_cluster(self, label: str = "SPEAKER_02") -> Speaker:
+        """A cluster a human marked as not-a-participant: a video, hold music.
+
+        The row shape a reprocess has to survive. ``_mark_excluded`` moves it off
+        DIARIZATION *without* renaming it, and nothing deletes it afterwards — so
+        a row whose name is ``SPEAKER_02`` outlives every re-run of the meeting.
+        """
+        speaker = self._add(label, SpeakerSource.MANUAL)
+        speaker.is_excluded = True
+        self._db.flush()
+        return speaker
+
     def _add(
         self, name: str, source: SpeakerSource, *, is_local_user: bool = False
     ) -> Speaker:
