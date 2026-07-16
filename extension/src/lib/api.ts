@@ -12,7 +12,10 @@ import type {
   Participant,
   Platform,
   Speaker,
+  SpeakerCluster,
   SpeakerEvent,
+  SpeakerMapping,
+  SpeakerResolution,
   Track,
   TranscriptSegment,
 } from './types';
@@ -122,12 +125,63 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
 }
 
 /** Re-run minutes generation over the existing transcript. Queues a new job and
- *  writes a new minutes version rather than overwriting the old one. */
+ *  writes a new minutes version rather than overwriting the old one.
+ *
+ *  A 409 means the meeting still has unnamed speakers. That is the one failure
+ *  here a user can actually act on, so its message is surfaced rather than
+ *  flattened into a status code. */
 export async function regenerateMinutes(meetingId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/meetings/${meetingId}/minutes/regenerate`, {
     method: 'POST',
   });
-  if (!res.ok) throw new Error(`regenerate failed: ${res.status}`);
+  if (!res.ok) throw new Error(await errorMessage(res, 'regenerate'));
+}
+
+/* --- Speaker mapping --- */
+
+/**
+ * The unnamed voices in a meeting, and the participants they might be.
+ *
+ * Diarization can separate voices but cannot name them, so a diarized meeting
+ * pauses before the minutes and waits for a human to answer this. Returns empty
+ * clusters for a meeting with nothing outstanding, which is the normal state and
+ * not worth a 404.
+ */
+export async function getSpeakerMapping(meetingId: string): Promise<SpeakerMapping> {
+  const raw = await get<RawSpeakerMapping>(`/meetings/${meetingId}/speaker-mapping`);
+  return toSpeakerMapping(raw);
+}
+
+/**
+ * Say who a cluster is: a known participant, a name, or nobody at all.
+ *
+ * Returns the mapping state *after* the change rather than the row that changed,
+ * because resolving the last cluster queues the minutes — the interesting result
+ * is about the meeting, not the speaker.
+ */
+export async function resolveSpeaker(
+  meetingId: string,
+  speakerId: string,
+  resolution: SpeakerResolution,
+): Promise<SpeakerMapping> {
+  const res = await fetch(
+    `${BASE_URL}/meetings/${meetingId}/speakers/${speakerId}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toRawResolution(resolution)),
+    },
+  );
+  if (!res.ok) throw new Error(await errorMessage(res, 'resolve speaker'));
+  return toSpeakerMapping((await res.json()) as RawSpeakerMapping);
+}
+
+function toRawResolution(resolution: SpeakerResolution): Record<string, unknown> {
+  if ('targetSpeakerId' in resolution) {
+    return { target_speaker_id: resolution.targetSpeakerId };
+  }
+  if ('displayName' in resolution) return { display_name: resolution.displayName };
+  return { ignore: true };
 }
 
 export async function getTranscript(meetingId: string): Promise<TranscriptSegment[]> {
@@ -183,6 +237,7 @@ interface RawSpeaker {
   display_name: string;
   source: Speaker['source'];
   is_local_user: boolean;
+  is_excluded: boolean;
 }
 
 interface RawMeeting {
@@ -207,6 +262,36 @@ interface RawSegment {
   text_en: string | null;
   speaker_id: string | null;
   speaker_source: TranscriptSegment['speakerSource'];
+}
+
+interface RawSpeakerCluster {
+  id: string;
+  display_name: string;
+  segment_count: number;
+  total_ms: number;
+  samples: string[];
+}
+
+interface RawSpeakerMapping {
+  clusters: RawSpeakerCluster[];
+  candidates: RawSpeaker[];
+  minutes_queued: boolean;
+}
+
+function toSpeakerMapping(raw: RawSpeakerMapping): SpeakerMapping {
+  return {
+    clusters: raw.clusters.map(
+      (c): SpeakerCluster => ({
+        id: c.id,
+        displayName: c.display_name,
+        segmentCount: c.segment_count,
+        totalMs: c.total_ms,
+        samples: c.samples,
+      }),
+    ),
+    candidates: raw.candidates.map(toSpeaker),
+    minutesQueued: raw.minutes_queued,
+  };
 }
 
 interface RawMinutes {
@@ -234,14 +319,38 @@ function toMeeting(raw: RawMeeting): Meeting {
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
     sourceLanguage: raw.source_language,
-    speakers: raw.speakers.map((s) => ({
-      id: s.id,
-      displayName: s.display_name,
-      source: s.source,
-      isLocalUser: s.is_local_user,
-    })),
+    speakers: raw.speakers.map(toSpeaker),
     jobs: raw.jobs,
   };
+}
+
+function toSpeaker(raw: RawSpeaker): Speaker {
+  return {
+    id: raw.id,
+    displayName: raw.display_name,
+    source: raw.source,
+    isLocalUser: raw.is_local_user,
+    isExcluded: raw.is_excluded,
+  };
+}
+
+/**
+ * Turn a failed response into something worth showing a user.
+ *
+ * FastAPI puts the reason in `detail`, and for this API the reason is often the
+ * whole point — "3 speakers still need identifying" tells someone what to do,
+ * where "409" tells them to file a bug. Falls back to the status code when the
+ * body is not the shape we expect, which is what a crashed or proxied server
+ * tends to return.
+ */
+async function errorMessage(res: Response, action: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    if (typeof body.detail === 'string') return body.detail;
+  } catch {
+    // Not JSON. The status code is all we have.
+  }
+  return `${action} failed: ${res.status}`;
 }
 
 async function get<T>(path: string): Promise<T> {

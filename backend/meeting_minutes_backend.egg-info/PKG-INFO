@@ -12,6 +12,9 @@ Requires-Dist: sqlalchemy>=2.0
 Requires-Dist: psycopg[binary]>=3.2
 Requires-Dist: alembic>=1.14
 Requires-Dist: faster-whisper>=1.1
+Requires-Dist: nvidia-cublas-cu12; sys_platform == "win32"
+Requires-Dist: nvidia-cudnn-cu12; sys_platform == "win32"
+Requires-Dist: openai>=1.60
 Requires-Dist: anthropic>=0.40
 Provides-Extra: diarization
 Requires-Dist: pyannote.audio>=3.3; extra == "diarization"

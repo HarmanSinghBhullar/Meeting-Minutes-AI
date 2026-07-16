@@ -3,6 +3,7 @@
   --muted: #6b7280;
   --line: #e5e7eb;
   --accent: #1a56db;
+  --accent-bg: #eaf1fd;
   --warn: #b45309;
   --warn-bg: #fffbeb;
   --quote-bg: #f6f8fa;
@@ -176,6 +177,99 @@ h2 {
   background: var(--warn-bg);
 }
 
+/* The only badge that is a request rather than a report. Coloured like the links
+   it sits beside, because it means "there is something for you to do here" —
+   whereas the green of "ready" and the amber of "failed" both mean "nothing to
+   do, for opposite reasons". */
+.badge.needs-input {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* --- Speaker mapping --- */
+
+.mapping {
+  margin-top: 24px;
+  padding: 4px 18px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+}
+
+/* This panel is a question, and a question the page will not proceed past. It
+   gets a border and a tint for the same reason it sits above the minutes: every
+   other section reports something, and it is the one asking. */
+.mapping h2 {
+  color: var(--accent);
+}
+
+.cluster-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cluster {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cluster:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.cluster-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+}
+
+.cluster-label {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-stats {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The evidence, and the largest thing in the row. Identifying a voice is done by
+   reading what it said; the dropdown is only how the answer is recorded. */
+.cluster-samples {
+  background: var(--quote-bg);
+}
+
+.cluster-pick {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.cluster-pick select {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--quote-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.cluster-name-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.link.strong {
+  font-weight: 600;
+}
+
 /* --- Minutes items --- */
 
 .items {
@@ -284,6 +378,7 @@ blockquote p:last-child {
     --muted: #9198a1;
     --line: #30363d;
     --accent: #6ea8fe;
+    --accent-bg: #10203a;
     --warn: #d29922;
     --warn-bg: #2b2413;
     --quote-bg: #161b22;

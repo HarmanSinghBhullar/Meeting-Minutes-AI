@@ -16,13 +16,15 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { getMeeting, getMinutes, getTranscript } from '@/lib/api';
+import { getMeeting, getMinutes, getSpeakerMapping, getTranscript } from '@/lib/api';
+import { SpeakerMapping } from './SpeakerMapping';
 import type {
   Meeting as MeetingModel,
   Minutes as MinutesModel,
   MinutesItem,
   MinutesItemType,
   Speaker,
+  SpeakerMapping as SpeakerMappingModel,
   TranscriptSegment,
 } from '@/lib/types';
 
@@ -46,18 +48,21 @@ export function Meeting({ meetingId }: Props): JSX.Element {
   const [meeting, setMeeting] = useState<MeetingModel | null>(null);
   const [minutes, setMinutes] = useState<MinutesModel | null>(null);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [mapping, setMapping] = useState<SpeakerMappingModel | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [m, mins, segs] = await Promise.all([
+      const [m, mins, segs, map] = await Promise.all([
         getMeeting(meetingId),
         getMinutes(meetingId),
         getTranscript(meetingId),
+        getSpeakerMapping(meetingId),
       ]);
       setMeeting(m);
       setMinutes(mins);
       setTranscript(segs);
+      setMapping(map);
       setError(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -81,12 +86,24 @@ export function Meeting({ meetingId }: Props): JSX.Element {
     return () => window.clearInterval(timer);
   }, [pending, load]);
 
+  // Resolving the last cluster queues the minutes server-side, so the page has to
+  // go back to polling — otherwise it would sit on "no minutes yet" while they
+  // were being written three feet away.
+  const handleResolved = useCallback(
+    (next: SpeakerMappingModel) => {
+      setMapping(next);
+      if (next.minutesQueued) void load();
+    },
+    [load],
+  );
+
   if (error) return <p className="error">{error}</p>;
   if (!meeting) return <p className="muted">Loading…</p>;
 
   const speakers = new Map(meeting.speakers.map((s) => [s.id, s]));
   const segments = new Map(transcript.map((s) => [s.id, s]));
   const failed = meeting.jobs.find((j) => j.status === 'failed');
+  const needsMapping = (mapping?.clusters.length ?? 0) > 0;
 
   return (
     <main>
@@ -117,10 +134,23 @@ export function Meeting({ meetingId }: Props): JSX.Element {
         </p>
       )}
 
+      {/* Above the minutes, because it is the reason there are none. */}
+      {needsMapping && mapping && (
+        <SpeakerMapping
+          meetingId={meetingId}
+          mapping={mapping}
+          onResolved={handleResolved}
+        />
+      )}
+
       {minutes ? (
         <MinutesView minutes={minutes} speakers={speakers} segments={segments} />
       ) : (
-        !pending && <p className="muted">No minutes yet.</p>
+        // "No minutes yet" is only the truth when nothing is standing in their
+        // way. While voices are unnamed the panel above already explains why, and
+        // repeating it as a bare shrug would read as a failure rather than a
+        // question waiting on an answer.
+        !pending && !needsMapping && <p className="muted">No minutes yet.</p>
       )}
 
       {transcript.length > 0 && (
@@ -299,9 +329,22 @@ function speakerLabel(speaker: Speaker): string {
     : speaker.displayName;
 }
 
-/** Who was in the meeting, the local user first, each tagged as needed. */
-function Attendance({ speakers }: { speakers: Speaker[] }): JSX.Element {
-  const ordered = [...speakers].sort(
+/**
+ * Who was in the meeting, the local user first, each tagged as needed.
+ *
+ * Two kinds of Speaker row are deliberately not attendance. An unnamed
+ * diarization cluster is an open question, not a person — listing "SPEAKER_01"
+ * here would assert that someone by that name attended. And an excluded cluster
+ * is a shared video or a noisy line, which by definition did not attend. Both are
+ * still speakers in the transcript; neither belongs on a register.
+ */
+function Attendance({ speakers }: { speakers: Speaker[] }): JSX.Element | null {
+  const attended = speakers.filter(
+    (s) => s.source !== 'diarization' && !s.isExcluded,
+  );
+  if (attended.length === 0) return null;
+
+  const ordered = [...attended].sort(
     (a, b) => Number(b.isLocalUser) - Number(a.isLocalUser),
   );
 

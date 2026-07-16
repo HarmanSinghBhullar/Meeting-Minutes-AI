@@ -73,7 +73,12 @@ class MeetingFinalize(BaseModel):
 
 
 class SpeakerOut(BaseModel):
-    """A participant."""
+    """A participant.
+
+    ``source == DIARIZATION`` marks an unnamed cluster — a voice pyannote found
+    and nobody has identified. The dashboard reads that off this list to show
+    "needs speakers" without a second request.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +86,9 @@ class SpeakerOut(BaseModel):
     display_name: str
     source: SpeakerSource
     is_local_user: bool
+    #: True for a cluster a human marked as not-a-participant (a shared video,
+    #: hold music). Present in the transcript, withheld from the minutes.
+    is_excluded: bool
 
 
 class RecordingOut(BaseModel):

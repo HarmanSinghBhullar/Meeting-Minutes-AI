@@ -73,11 +73,13 @@ const SELECTORS = {
   speaking: [
     '[data-is-speaking="true"]',
     '[aria-label*="speaking" i]',
-    // Confirmed with __meetCalibrate() on 2026-07-15: the class Meet toggles onto
-    // a tile while its participant is talking. Obfuscated, so it *will* rot — when
-    // remote speakers start coming out "Unknown", re-run the calibration tool and
-    // replace this. (The previous value, `.wnrUse.IisKdb`, had already rotted.)
-    '.BlxGDf',
+    // The class Meet toggles onto a tile while its participant is talking, from
+    // two __meetCalibrate() runs on 2026-07-16 — one local speaker, one remote.
+    // It is the only candidate that survived both, which is the bar: a class that
+    // appears for one run is as likely to be that speaker's own chrome as a real
+    // signal. Obfuscated, so it *will* rot (`.BlxGDf` and `.wnrUse.IisKdb` both
+    // did) — when remote speakers regress to "Unknown", re-run the tool.
+    '.kssMZb',
   ],
 
   /**

@@ -131,9 +131,46 @@ export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 export interface Speaker {
   id: string;
   displayName: string;
+  /** `'diarization'` is the one value that means "this is not a person yet" —
+   *  it is a voice the diarizer separated out that nobody has named. That makes
+   *  it the meeting's unmapped-speaker signal, and it is why the dashboard can
+   *  show "needs speakers" without asking the server anything extra. */
   source: SpeakerSource;
   isLocalUser: boolean;
+  /** Marked by a human as not-a-participant: a shared video, hold music. Still
+   *  in the transcript, kept out of the minutes. */
+  isExcluded: boolean;
 }
+
+/** A voice the diarizer found and nobody has identified yet.
+ *
+ *  `samples` is the load-bearing field. "SPEAKER_01" identifies nobody; the
+ *  longest thing that voice said usually identifies them instantly to anyone who
+ *  was in the meeting. Without the samples this UI would be a guessing game. */
+export interface SpeakerCluster {
+  id: string;
+  displayName: string;
+  segmentCount: number;
+  totalMs: number;
+  samples: string[];
+}
+
+/** Everything the speaker-mapping panel needs, in one response. */
+export interface SpeakerMapping {
+  /** Unnamed voices, longest-talking first. */
+  clusters: SpeakerCluster[];
+  /** Roster participants a cluster can be mapped onto. Never includes the local
+   *  user: their audio is the mic track, which is never diarized. */
+  candidates: Speaker[];
+  /** True when that resolution was the last one and the minutes are now queued. */
+  minutesQueued: boolean;
+}
+
+/** How a cluster was identified. Exactly one field, matching the API. */
+export type SpeakerResolution =
+  | { targetSpeakerId: string }
+  | { displayName: string }
+  | { ignore: true };
 
 export interface Job {
   id: string;

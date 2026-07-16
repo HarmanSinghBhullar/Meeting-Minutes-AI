@@ -161,7 +161,15 @@ function MeetingRow({
   const busy = meeting.jobs.some(
     (j) => j.status === 'pending' || j.status === 'running',
   );
-  const canRegenerate = transcribed && !busy;
+
+  // An unnamed diarization cluster is the whole "needs speakers" state, and it is
+  // already in the speaker list this row was rendered from — no extra request to
+  // work out whether this meeting is waiting on its user.
+  const unmapped = meeting.speakers.filter((s) => s.source === 'diarization').length;
+
+  // The server would refuse this with a 409 anyway. Not offering it is the better
+  // half of that: an action that always fails should not be a button.
+  const canRegenerate = transcribed && !busy && unmapped === 0;
 
   function saveRename(): void {
     const title = draft.trim();
@@ -219,9 +227,7 @@ function MeetingRow({
           </a>
           <p className="meeting-meta">
             <span>{formatDate(meeting.startedAt)}</span>
-            {meeting.speakers.length > 0 && (
-              <span>{meeting.speakers.map((s) => s.displayName).join(', ')}</span>
-            )}
+            {attendeeNames(meeting) && <span>{attendeeNames(meeting)}</span>}
             <StatusBadge meeting={meeting} />
           </p>
         </div>
@@ -229,6 +235,19 @@ function MeetingRow({
 
       {!editing && (
         <div className="meeting-actions">
+          {/* The one action on a gated meeting worth pulling to the front. It is
+              a plain link to the meeting page, where the naming happens next to
+              the transcript — deciding who a voice is means reading what it said,
+              and a dashboard row has nowhere to show that. */}
+          {unmapped > 0 && (
+            <a
+              className="link strong"
+              href={`?id=${meeting.id}`}
+              title="Name the voices in this meeting so the minutes can be written"
+            >
+              Map speakers ({unmapped})
+            </a>
+          )}
           {canRegenerate && (
             <button
               type="button"
@@ -251,6 +270,20 @@ function MeetingRow({
   );
 }
 
+/**
+ * The names to show on a row: who actually attended.
+ *
+ * Unnamed clusters and excluded ones are filtered out for the same reason as on
+ * the meeting page — "SPEAKER_00, SPEAKER_01" is not a useful description of who
+ * was in a call, and it is not what the row is for.
+ */
+function attendeeNames(meeting: Meeting): string {
+  return meeting.speakers
+    .filter((s) => s.source !== 'diarization' && !s.isExcluded)
+    .map((s) => s.displayName)
+    .join(', ');
+}
+
 /** A one-word verdict on where a meeting is in the pipeline. */
 function StatusBadge({ meeting }: { meeting: Meeting }): JSX.Element {
   const running = meeting.jobs.find(
@@ -260,6 +293,15 @@ function StatusBadge({ meeting }: { meeting: Meeting }): JSX.Element {
 
   const failed = meeting.jobs.find((j) => j.status === 'failed');
   if (failed) return <span className="badge failed">{failed.type} failed</span>;
+
+  // Ahead of "ready" and "transcribed": both are true of a meeting waiting on its
+  // speakers, and neither is the thing the user needs to know about it. This is
+  // the only badge that is a request rather than a report, so it earns its place
+  // at the top and its own colour.
+  const unmapped = meeting.speakers.filter((s) => s.source === 'diarization').length;
+  if (unmapped > 0) {
+    return <span className="badge needs-input">Needs speakers ({unmapped})</span>;
+  }
 
   const ready = meeting.jobs.some((j) => j.type === 'ground' && j.status === 'succeeded');
   if (ready) return <span className="badge ready">Minutes ready</span>;

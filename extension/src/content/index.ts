@@ -35,7 +35,7 @@ const FLUSH_INTERVAL_MS = 10_000;
  * is this tab running?" answerable at a glance: bump it whenever the adapter
  * changes, refresh the tab, and confirm the new stamp appears.
  */
-const BUILD = 'meet-adapter 2026-07-16 (speaking=.BlxGDf, +self-detect, +presenter)';
+const BUILD = 'meet-adapter 2026-07-16c (speaking=.kssMZb, +self-detect, +presenter)';
 
 const platform = detectPlatform();
 const adapter = getAdapter(platform);

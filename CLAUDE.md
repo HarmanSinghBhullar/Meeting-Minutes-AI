@@ -8,9 +8,9 @@ Meeting Intelligence Browser Extension
 - Generate transcript
 - Store transcript in PostgreSQL
 - Translate transcript to English
-- Speaker identification
+- Speaker identification (pyannote diarization + a human mapping step)
 - Meeting summaries
-- Meeting dashboard (list, open, rename, delete, regenerate minutes)
+- Meeting dashboard (list, open, rename, delete, map speakers, regenerate minutes)
 - RAG Q&A over previous meetings
 
 ## Tech Stack
@@ -43,33 +43,93 @@ AI:
 Keep this section current as features land — update it in the same change that
 changes the behaviour, so it never drifts from the code.
 
-Working end to end: audio → ffmpeg → Whisper `large-v3` → attribution
-(DOM speaker timeline for Meet/Zoom/Teams, pyannote fallback otherwise) →
-word-level alignment → attributed segments in Postgres → translation for
-non-English meetings (`services/translation.py`, batched through the same
-structured-LLM provider as the minutes; writes `Segment.text_en`, never over
-`text`) → cited minutes (`services/minutes/`, OpenAI + Anthropic providers) →
-grounding pass. The extension records, uploads to the API, and returns minutes
-on a live meeting.
+Working end to end: audio → ffmpeg → Whisper `large-v3` → **pyannote diarization**
+of the tab track → word-level alignment → attributed segments in Postgres →
+translation for non-English meetings (`services/translation.py`, batched through
+the same structured-LLM provider as the minutes; writes `Segment.text_en`, never
+over `text`) → **speaker mapping (a human step — see below)** → cited minutes
+(`services/minutes/`, OpenAI + Anthropic providers) → grounding pass.
+
+### Attribution is diarization + a manual mapping step
+
+The DOM active-speaker timeline used to be the primary attribution source and
+**has been removed** (`services/attribution/dom_timeline.py` is deleted). It read
+per-frame CSS classes out of the meeting UI, and when a platform reskinned it did
+not error — it silently stopped matching and attributed every remote speaker to
+"Unknown", surfacing days later as minutes with no owners. It was traded for a
+signal that cannot break that way.
+
+So `pyannote/speaker-diarization-3.1` now attributes every tab track
+(`_remote_speaker_turns`). Consequences worth knowing:
+
+- **The `[diarization]` extra is now required for the worker**, not optional:
+  `pip install -e ".[diarization]"`, plus `HUGGINGFACE_TOKEN` and the accepted
+  licences for **both** `segmentation-3.0` and `speaker-diarization-3.1`.
+  `PYANNOTE_DEVICE` (default `cuda`) exists because pyannote otherwise runs on
+  CPU. On Windows, torch must come from PyTorch's index — the PyPI wheel is
+  CPU-only and fails silently into a slow CPU diarization.
+- **Diarization runs in a child process** (`attribution/diarize_cli.py`), and this
+  is not optional either. CTranslate2 and torch cannot both initialise cuDNN in
+  one process: after Whisper touches the GPU, torch's cuDNN load aborts the
+  interpreter with exit 127 and no traceback. Verified reproducible with both
+  `cudnn64_9.dll` copies byte-identical, so it is not a version conflict — do not
+  "simplify" the subprocess away. `workers/pipeline.py` must never import torch.
+- **Every version bound in the `diarization` extra is load-bearing** and each was
+  found by an install that broke: `pyannote.audio<4` (4.x renamed
+  `use_auth_token`→`token` and needs FFmpeg shared libs via torchcodec),
+  `torch<2.6` (2.6 flipped `torch.load(weights_only=True)`, which rejects
+  pyannote's checkpoints), `torchaudio<2.6` (2.9 dropped
+  `torchaudio.AudioMetaData`, imported by pyannote at module scope),
+  `huggingface_hub<1` (1.0 removed the `use_auth_token` argument pyannote passes).
+  Also: `speechbrain` must be `1.0.x` — 1.1's lazy `integrations.k2_fsa` import
+  explodes under pyannote 3.x. And `nvidia-cudnn-cu12`/`nvidia-cublas-cu12` must
+  match what torch bundles.
+- **The mic track is never diarized** — it is the local user by definition — so
+  clusters are always remote participants and the user is never asked to identify
+  themselves.
+- The roster (`getParticipants()` → `Speaker` rows, `source=DOM`) is captured once
+  from the participant list and is *not* the fragile part. It survives as the
+  name source: the candidate list for mapping, and the `max_speakers` bound passed
+  to pyannote (`_remote_speaker_bound`: roster + 1, never an exact count).
+
+**The mapping gate.** A diarized meeting stops after transcription/translation and
+waits: minutes crediting `SPEAKER_01` are not a rough draft, they are a confident
+wrong answer. The gate is `Speaker.source == DIARIZATION` — an unnamed cluster row
+*is* the unmapped state, so there is no status column to keep in step
+(`services/attribution/mapping.unmapped_cluster_count`, which lives outside
+`workers/pipeline` so the API can import it without pulling in torch). Resolving
+the last cluster queues `MINUTES` (`api/v1/routes/speakers.py`);
+`POST /minutes/regenerate` returns **409** while any remain, and `run_minutes`
+raises if it is ever reached with clusters outstanding.
+
+Three resolutions, via `POST /meetings/{id}/speakers/{sid}/resolve`:
+`target_speaker_id` **merges** the cluster into a roster speaker (reassigns the
+segments and *deletes* the cluster row — renaming it would leave two Priyas),
+`display_name` names a phone/late joiner in place, and `ignore` sets the new
+`Speaker.is_excluded` for a shared video or hold music (its segments stay in the
+transcript but `_minutable` withholds them from the minutes). All three mark the
+segments `MANUAL`. Reprocessing deletes stale `DIARIZATION` rows, since cluster
+numbering is not stable across runs.
+
+The UI is `meeting/SpeakerMapping.tsx`, above the minutes on the meeting page:
+each cluster leads with its **longest** lines (the identifying ones — a call opens
+with "hi"), longest-talking cluster first. The dashboard derives `Needs speakers
+(n)` straight off `meeting.speakers` with no extra request.
 
 Opening the extension's meeting page with no `?id=` renders a **dashboard**
 (`meeting/Dashboard.tsx`) listing every meeting with open / rename / delete /
-regenerate-minutes — backed by `PATCH /meetings/{id}` (rename),
+map-speakers / regenerate-minutes — backed by `PATCH /meetings/{id}` (rename),
 `DELETE /meetings/{id}` (cascades the row and calls `storage.delete_meeting` to
 remove the audio), and `POST /meetings/{id}/minutes/regenerate`. The minutes
 summary is stored and shown as point-wise bullets (`Minutes` heading), and
 attendees appear under an `Attendance` heading tagged `Name (You)` for the local
-user.
+user — excluding unnamed clusters and excluded ones, which are not attendance.
 
-The Meet adapter identifies the local user (via `data-self-name` or Meet's
-"(You)" marker) so their track is named rather than an invented "You". Besides
-active-speaker turns, the adapter also emits **presenter** turns
-(`SpeakerSource.PRESENTER`) for screen-shared audio that has no speaking signal;
-`alignment._speaker_for_word` ranks these below any real speaking turn, so a
-shared video is attributed to the sharer instead of coming out "Unknown". The two
-Meet DOM selectors this rests on (`SELECTORS.speaking`, `SELECTORS.presenting`)
-are obfuscation-fragile — re-run `__meetCalibrate()` when remote speakers regress
-to "Unknown".
+The Meet adapter still identifies the local user (via `data-self-name` or Meet's
+"(You)" marker) so their track is named rather than an invented "You". It also
+still records active-speaker and presenter events to `SpeakerEvent`; these no
+longer drive attribution and are kept only as evaluation data against the
+diarizer. `SELECTORS.speaking` rotting is therefore no longer a correctness bug.
 
 Not yet built:
 
@@ -83,3 +143,9 @@ Not yet built:
 - Extension: `cd extension && npm run build`, then load `extension/dist` unpacked
   at `chrome://extensions`.
 - Requires PostgreSQL, `ffmpeg` on `PATH`, and an NVIDIA GPU. See `README.md`.
+- The worker additionally requires `pip install -e ".[diarization]"` and a
+  `HUGGINGFACE_TOKEN` with the pyannote licences accepted — without them every
+  transcribe job fails at attribution.
+- Tests need Postgres: `tests/conftest.py` creates and drops a `meeting_minutes_test`
+  database (not SQLite — the models are Postgres-specific, and a stand-in that
+  passed while the real database did otherwise would be worse than no test).
