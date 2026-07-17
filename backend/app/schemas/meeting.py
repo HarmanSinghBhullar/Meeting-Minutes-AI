@@ -35,6 +35,18 @@ class MeetingCreate(BaseModel):
     speakers: list[SpeakerIn] = []
 
 
+class SpeakerBatch(BaseModel):
+    """The meeting's roster as the adapter currently reads it.
+
+    Posted repeatedly during the recording rather than once at the start, because
+    a roster read once is a roster that is wrong the moment anybody joins. Sending
+    the whole list rather than a delta keeps the client dumb and the endpoint
+    idempotent — the server decides what is new.
+    """
+
+    participants: list[SpeakerIn] = []
+
+
 class SpeakerEventIn(BaseModel):
     """One active-speaker interval observed in the meeting UI.
 

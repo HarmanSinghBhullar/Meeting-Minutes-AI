@@ -70,6 +70,26 @@ export async function uploadChunk(
   if (!res.ok) throw new Error(`Chunk upload failed: ${res.status}`);
 }
 
+/**
+ * Merge the roster as it looks now into the meeting.
+ *
+ * Additive on the server: it creates people it has not seen and leaves everyone
+ * else alone, so this is safe to call as often as the adapter reads the page.
+ */
+export async function postParticipants(
+  meetingId: string,
+  participants: Participant[],
+): Promise<void> {
+  if (participants.length === 0) return;
+  await post(`/recordings/meetings/${meetingId}/participants`, {
+    participants: participants.map((p) => ({
+      display_name: p.displayName,
+      external_ref: p.externalRef,
+      is_local_user: p.isLocalUser,
+    })),
+  });
+}
+
 /** Post a batch of active-speaker intervals observed in the meeting UI. */
 export async function postSpeakerEvents(
   meetingId: string,

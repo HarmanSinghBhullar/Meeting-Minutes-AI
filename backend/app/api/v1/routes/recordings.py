@@ -22,6 +22,7 @@ from app.schemas.meeting import (
     MeetingCreate,
     MeetingFinalize,
     MeetingOut,
+    SpeakerBatch,
     SpeakerEventBatch,
 )
 from app.services.audio import storage
@@ -105,6 +106,76 @@ async def upload_chunk(
     db.commit()
 
     return {"chunk_count": recording.chunk_count}
+
+
+@router.post("/meetings/{meeting_id}/participants", status_code=status.HTTP_202_ACCEPTED)
+def post_participants(
+    meeting_id: uuid.UUID,
+    payload: SpeakerBatch,
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """Merge the meeting's current roster into the one we opened with.
+
+    ``open_meeting`` captures the roster once, in the same call stack as the click
+    that starts recording. That single read is wrong in two ordinary cases, and
+    both were being lost silently: the tile grid may not have rendered yet (the
+    roster comes back empty and stays empty for the whole meeting), and **anyone
+    who joins later never appears at all** — they are simply absent from the
+    attendance list and from the candidates offered for their own voice.
+
+    So the adapter re-reads and re-posts, and this reconciles. It is **additive
+    only**: it never renames, never deletes, and never touches a row a human has
+    already ruled on. The roster is a name source, not an authority over what
+    somebody decided a cluster was.
+    """
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found.")
+
+    existing = list(
+        db.execute(select(Speaker).where(Speaker.meeting_id == meeting_id)).scalars()
+    )
+    # Two indexes, because the platform's participant id is the better key but is
+    # not always there: `post_speaker_events` creates rows from a name alone, and
+    # an adapter may read a tile that has no id on it.
+    by_ref = {s.external_ref: s for s in existing if s.external_ref}
+    by_name = {s.display_name: s for s in existing}
+
+    created = 0
+    for p in payload.participants:
+        if p.external_ref and p.external_ref in by_ref:
+            continue
+
+        known = by_name.get(p.display_name)
+        if known is not None:
+            # Same person, seen earlier without an id — most likely created from a
+            # speaker event before the roster caught up. Backfilling the id is the
+            # one update worth making: it is how they stay one row across a
+            # reconnect, when their name is all we would otherwise have to go on.
+            if p.external_ref and not known.external_ref:
+                known.external_ref = p.external_ref
+                by_ref[p.external_ref] = known
+            continue
+
+        speaker = Speaker(
+            meeting_id=meeting_id,
+            display_name=p.display_name,
+            external_ref=p.external_ref,
+            is_local_user=p.is_local_user,
+            # Straight from the platform's own participant list, same as the rows
+            # `open_meeting` writes. Arriving late makes it no less a real name.
+            source=SpeakerSource.DOM,
+        )
+        db.add(speaker)
+        db.flush()  # so a duplicate later in this same batch matches it
+
+        by_name[p.display_name] = speaker
+        if p.external_ref:
+            by_ref[p.external_ref] = speaker
+        created += 1
+
+    db.commit()
+    return {"created": created}
 
 
 @router.post("/meetings/{meeting_id}/speaker-events", status_code=status.HTTP_202_ACCEPTED)

@@ -73,13 +73,19 @@ const SELECTORS = {
   speaking: [
     '[data-is-speaking="true"]',
     '[aria-label*="speaking" i]',
-    // The class Meet toggles onto a tile while its participant is talking, from
-    // two __meetCalibrate() runs on 2026-07-16 — one local speaker, one remote.
-    // It is the only candidate that survived both, which is the bar: a class that
-    // appears for one run is as likely to be that speaker's own chrome as a real
-    // signal. Obfuscated, so it *will* rot (`.BlxGDf` and `.wnrUse.IisKdb` both
-    // did) — when remote speakers regress to "Unknown", re-run the tool.
-    '.kssMZb',
+    // The class Meet toggles onto a tile while its participant is talking, from a
+    // __meetCalibrate() run on 2026-07-17 — the sole candidate that separated
+    // SPEAK from SILENT. Its predecessors `.BlxGDf`, `.wnrUse.IisKdb` and
+    // `.kssMZb` all rotted, the last of them within a day of being pasted here,
+    // which is the argument for the two semantic selectors above it and for
+    // diarization owning attribution: when this rots we lose eval data, not names.
+    //
+    // One run, not the two (local + remote) that `.kssMZb` was held to. That bar
+    // exists because a class seen in a single run may be that speaker's own
+    // chrome rather than a mic signal — so if remote speakers still produce no
+    // events, re-run on a call where someone else talks before suspecting
+    // anything deeper.
+    '.sxlEM',
   ],
 
   /**

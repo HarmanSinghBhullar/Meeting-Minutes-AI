@@ -18,6 +18,7 @@
 import type {
   ExtensionMessage,
   MeetingContext,
+  Participant,
   Platform,
   SpeakerEvent,
   StoppedResult,
@@ -28,6 +29,22 @@ import { getAdapter, type ObservedTurn } from './adapters';
 const FLUSH_INTERVAL_MS = 10_000;
 
 /**
+ * How often the roster is re-read.
+ *
+ * The roster used to be read exactly once, in the call stack of the click that
+ * starts recording, and that read was treated as the meeting's cast list. It is
+ * wrong in both directions: the tile grid may not have rendered yet, in which
+ * case the meeting has *nobody* in it for its whole duration; and anyone who
+ * joins later never appears at all, which is not an edge case — it is how most
+ * meetings begin.
+ *
+ * Re-reading costs a `querySelectorAll` and a few string reads, so the interval
+ * is set by how quickly a newcomer should show up rather than by expense. Five
+ * seconds is far finer than people actually join.
+ */
+const ROSTER_INTERVAL_MS = 5_000;
+
+/**
  * A human-readable stamp logged the moment this script loads. Reloading the
  * extension does *not* replace the content script already running in an open
  * meeting tab — only a real tab refresh does — so during development it is easy
@@ -35,7 +52,7 @@ const FLUSH_INTERVAL_MS = 10_000;
  * is this tab running?" answerable at a glance: bump it whenever the adapter
  * changes, refresh the tab, and confirm the new stamp appears.
  */
-const BUILD = 'meet-adapter 2026-07-16c (speaking=.kssMZb, +self-detect, +presenter)';
+const BUILD = 'meet-adapter 2026-07-17b (speaking=.sxlEM, +self-detect, +presenter, +roster-poll)';
 
 const platform = detectPlatform();
 const adapter = getAdapter(platform);
@@ -46,8 +63,20 @@ console.info('[meeting-intelligence] content script loaded — %s', BUILD);
 let recordingStartedAt: number | null = null;
 let pending: SpeakerEvent[] = [];
 let flushTimer: number | null = null;
+let rosterTimer: number | null = null;
 /** Total speaker events produced this recording — 0 means everyone is Unknown. */
 let totalEvents = 0;
+
+/**
+ * Roster members already handed to the service worker.
+ *
+ * Keyed by the platform's participant id where there is one, since that survives
+ * a rename mid-call, and by name otherwise. Deliberately *not* seeded with the
+ * roster sent at `openMeeting`: re-sending those costs one request the server
+ * discards, and buys the repair for the case that started all this — a roster
+ * that came back empty at click time is refilled by the first tick.
+ */
+let sentParticipants = new Set<string>();
 
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse: (response?: unknown) => void) => {
@@ -62,9 +91,9 @@ chrome.runtime.onMessage.addListener(
         return false;
 
       case 'RECORDING_STOPPED':
-        // The turns that were never flushed go back in the reply, so the service
-        // worker can post them *before* it finalizes the meeting.
-        sendResponse({ events: stop() } satisfies StoppedResult);
+        // Whatever was never flushed goes back in the reply, so the service
+        // worker can post it *before* it finalizes the meeting.
+        sendResponse(stop() satisfies StoppedResult);
         return false;
 
       default:
@@ -88,6 +117,7 @@ function start(startedAt: number): void {
   recordingStartedAt = startedAt;
 
   totalEvents = 0;
+  sentParticipants = new Set();
   adapter.observe((turn: ObservedTurn) => {
     const event = rebase(turn);
     if (event) {
@@ -97,6 +127,7 @@ function start(startedAt: number): void {
   });
 
   flushTimer = window.setInterval(flush, FLUSH_INTERVAL_MS);
+  rosterTimer = window.setInterval(flushRoster, ROSTER_INTERVAL_MS);
 }
 
 /**
@@ -108,8 +139,8 @@ function start(startedAt: number): void {
  * that job, and the batch would sometimes lose, leaving the closing minutes of
  * the meeting with no name against them.
  */
-function stop(): SpeakerEvent[] {
-  if (!adapter || recordingStartedAt === null) return [];
+function stop(): StoppedResult {
+  if (!adapter || recordingStartedAt === null) return { events: [], participants: [] };
 
   // Emits whatever turn was still open. The last speaker before someone hits
   // stop is often the one summarising what was just agreed, so dropping them is
@@ -119,6 +150,11 @@ function stop(): SpeakerEvent[] {
   if (flushTimer !== null) {
     window.clearInterval(flushTimer);
     flushTimer = null;
+  }
+
+  if (rosterTimer !== null) {
+    window.clearInterval(rosterTimer);
+    rosterTimer = null;
   }
 
   if (totalEvents === 0) {
@@ -133,7 +169,10 @@ function stop(): SpeakerEvent[] {
   pending = [];
   recordingStartedAt = null;
 
-  return remaining;
+  // One last read on the way out. Someone who joined in the closing seconds is as
+  // real an attendee as anyone, and this is the only chance left to notice them:
+  // the service worker finalizes immediately after this returns.
+  return { events: remaining, participants: takeNewParticipants() };
 }
 
 /** Convert a wall-clock turn onto the recording's clock. */
@@ -170,6 +209,42 @@ function flush(): void {
       // it, which is precisely the failure this whole mechanism exists to avoid.
       pending = [...events, ...pending];
       console.error('[content] failed to flush speaker events', err);
+    });
+}
+
+/**
+ * Roster members we have not handed over yet.
+ *
+ * Marks them sent, so the caller owns delivering them and must put them back if
+ * it cannot — same contract as `flush`, and for the same reason: a participant
+ * dropped here is one who silently never attended.
+ */
+function takeNewParticipants(): Participant[] {
+  if (!adapter) return [];
+
+  const fresh = adapter
+    .getParticipants()
+    .filter((p) => !sentParticipants.has(participantKey(p)));
+
+  for (const p of fresh) sentParticipants.add(participantKey(p));
+  return fresh;
+}
+
+function participantKey(p: Participant): string {
+  // Prefixed, so a platform id can never collide with somebody's actual name.
+  return p.externalRef ?? `name:${p.displayName}`;
+}
+
+function flushRoster(): void {
+  const participants = takeNewParticipants();
+  if (participants.length === 0) return;
+
+  void chrome.runtime
+    .sendMessage({ type: 'PARTICIPANTS', participants } satisfies ExtensionMessage)
+    .catch((err: unknown) => {
+      // Un-mark them, so the next tick tries again rather than writing them off.
+      for (const p of participants) sentParticipants.delete(participantKey(p));
+      console.error('[content] failed to send roster', err);
     });
 }
 

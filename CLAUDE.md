@@ -95,10 +95,18 @@ So `pyannote/speaker-diarization-3.1` now attributes every tab track
 - **The mic track is never diarized** — it is the local user by definition — so
   clusters are always remote participants and the user is never asked to identify
   themselves.
-- The roster (`getParticipants()` → `Speaker` rows, `source=DOM`) is captured once
-  from the participant list and is *not* the fragile part. It survives as the
-  name source: the candidate list for mapping, and the `max_speakers` bound passed
-  to pyannote (`_remote_speaker_bound`: roster + 1, never an exact count).
+- The roster (`getParticipants()` → `Speaker` rows, `source=DOM`) is *not* the
+  fragile part. It survives as the name source: the candidate list for mapping,
+  and the `max_speakers` bound passed to pyannote (`_remote_speaker_bound`:
+  roster + 1, never an exact count). It is **polled every 5s and once more on
+  stop**, not captured once. The single read taken in the record click's call
+  stack was wrong in two ordinary ways, both silent: the tile grid may not have
+  rendered yet (a real 2026-07-17 meeting came out with *nobody* on it and five
+  unnamed clusters), and anyone joining later never appeared at all — no
+  attendance, and no candidate offered for their own voice. Newcomers merge via
+  `POST /recordings/meetings/{id}/participants`, which is **additive only**: it
+  never renames, never deletes, and never touches a row a human ruled on at the
+  mapping panel, because the roster arrives on a timer and an answer does not.
 - **Only rows that stand for a real person feed Whisper and pyannote**
   (`_real_people` in `workers/pipeline.py`), which is subtler than it sounds
   because both inputs are read *before* the same job clears the last run's rows.
@@ -163,6 +171,12 @@ remove the audio), and `POST /meetings/{id}/minutes/regenerate`. The minutes
 summary is stored and shown as point-wise bullets (`Minutes` heading), and
 attendees appear under an `Attendance` heading tagged `Name (You)` for the local
 user — excluding unnamed clusters and excluded ones, which are not attendance.
+That section **always renders**: unnamed clusters are *counted* beneath the
+register (`N voices are not identified yet`, linking to the mapping panel) rather
+than listed in it. A meeting whose roster never got captured has nothing but
+clusters, and rendering nothing at all made the names look lost rather than
+unasked-for — while listing `SPEAKER_01` as an attendee would assert a person by
+that name was there. Counting is the only honest third option.
 
 The transcript below them is grouped into a collapsible `<details>` per
 wall-clock minute (`Meeting.tsx`, `bucketByMinute`), summarised by range, line

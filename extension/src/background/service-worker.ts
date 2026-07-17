@@ -26,7 +26,12 @@
  * something the transcript will never see.
  */
 
-import { finalizeMeeting, openMeeting, postSpeakerEvents } from '@/lib/api';
+import {
+  finalizeMeeting,
+  openMeeting,
+  postParticipants,
+  postSpeakerEvents,
+} from '@/lib/api';
 import type {
   ExtensionMessage,
   MeetingContext,
@@ -60,14 +65,27 @@ interface RecordingSession {
 }
 
 /**
- * Speaker-event batches still in flight.
+ * Posts from the content script still in flight — speaker events and roster
+ * updates alike.
  *
  * Posting them is fire-and-forget during the meeting, which is fine — but a batch
  * that lands *after* the transcription job has been queued is a batch the
- * attribution step never sees, and the speakers in it come out unnamed. So we
- * keep them and wait for them at the end.
+ * attribution step never sees. For events, the speakers in it come out unnamed;
+ * for the roster, a late joiner misses the `initial_prompt` and the
+ * `max_speakers` bound, and is not on the candidate list for their own voice. So
+ * we keep them and wait for them at the end.
  */
-const pendingSpeakerPosts = new Set<Promise<void>>();
+const pendingPosts = new Set<Promise<void>>();
+
+/** Run `work` in the background, holding finalize open until it lands. */
+function trackPost(work: () => Promise<void>, what: string): void {
+  const post = work().catch((err: unknown) => {
+    console.error(`[worker] failed to post ${what}`, err);
+  });
+
+  pendingPosts.add(post);
+  void post.finally(() => pendingPosts.delete(post));
+}
 
 /**
  * Read the live recording.
@@ -118,16 +136,20 @@ chrome.runtime.onMessage.addListener(
       case 'SPEAKER_EVENTS': {
         // The meeting id is looked up rather than remembered — this worker may
         // have been evicted and restarted several times since recording began.
-        const post = (async () => {
+        trackPost(async () => {
           const session = await loadSession();
           if (!session) return;
           await postSpeakerEvents(session.meetingId, message.events);
-        })().catch((err: unknown) => {
-          console.error('[worker] failed to post speaker events', err);
-        });
+        }, 'speaker events');
+        return false;
+      }
 
-        pendingSpeakerPosts.add(post);
-        void post.finally(() => pendingSpeakerPosts.delete(post));
+      case 'PARTICIPANTS': {
+        trackPost(async () => {
+          const session = await loadSession();
+          if (!session) return;
+          await postParticipants(session.meetingId, message.participants);
+        }, 'roster');
         return false;
       }
 
@@ -224,13 +246,17 @@ async function stopRecording(): Promise<void> {
     // agreed, which is precisely the turn worth having.
     if (tabId !== null) {
       const stopped = await sendToTab<StoppedResult>(tabId, { type: 'RECORDING_STOPPED' });
-      if (meetingId && stopped && stopped.events.length > 0) {
+      if (meetingId && stopped) {
+        // The roster first. Both must land before finalize, but this one names
+        // people the events may only refer to, and posting it first means a late
+        // joiner's own words never arrive before the row that says who they are.
+        await postParticipants(meetingId, stopped.participants);
         await postSpeakerEvents(meetingId, stopped.events);
       }
     }
 
-    // And any batch a periodic flush left in the air.
-    await Promise.all([...pendingSpeakerPosts]);
+    // And anything a periodic flush left in the air.
+    await Promise.all([...pendingPosts]);
 
     if (meetingId) await finalizeMeeting(meetingId);
   } finally {

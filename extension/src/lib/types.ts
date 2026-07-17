@@ -61,7 +61,11 @@ export type ExtensionMessage =
   | { type: 'RECORDING_STOPPED' }
 
   // content script -> service worker
-  | { type: 'SPEAKER_EVENTS'; events: SpeakerEvent[] };
+  | { type: 'SPEAKER_EVENTS'; events: SpeakerEvent[] }
+  /** The roster as it looks now — sent whenever it grows, not just at the start.
+   *  Someone who joins mid-meeting is a real attendee, and the read taken in the
+   *  record click's call stack cannot know about them. */
+  | { type: 'PARTICIPANTS'; participants: Participant[] };
 
 export interface RecordingState {
   isRecording: boolean;
@@ -100,11 +104,14 @@ export interface StopResult {
   failed: number;
 }
 
-/** Reply to `RECORDING_STOPPED`: the speaker turns the content script had not
- *  flushed yet, handed back directly so the service worker can post them before
- *  it finalizes the meeting. */
+/** Reply to `RECORDING_STOPPED`: what the content script had not flushed yet,
+ *  handed back directly so the service worker can post it before it finalizes
+ *  the meeting. */
 export interface StoppedResult {
   events: SpeakerEvent[];
+  /** Roster members seen since the last post — including anyone who joined in
+   *  the final seconds, who would otherwise be dropped on the way out. */
+  participants: Participant[];
 }
 
 /* --- Read models, as returned by the API --- */

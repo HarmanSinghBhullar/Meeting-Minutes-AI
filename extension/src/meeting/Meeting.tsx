@@ -37,6 +37,9 @@ const MINUTE_MS = 60_000;
 /** How many speaker names a collapsed minute names before it starts counting. */
 const PREVIEW_SPEAKERS = 2;
 
+/** Links Attendance's "not identified yet" count to the panel that answers it. */
+const MAPPING_ANCHOR = 'speaker-mapping';
+
 const SECTIONS: { type: MinutesItemType; title: string }[] = [
   // Action items first: they are the part somebody has to do something about.
   { type: 'action_item', title: 'Action items' },
@@ -125,7 +128,14 @@ export function Meeting({ meetingId }: Props): JSX.Element {
         </p>
       </header>
 
-      {meeting.speakers.length > 0 && <Attendance speakers={meeting.speakers} />}
+      {/* Always rendered. "Who was in this?" is the first question the page is
+          asked, and a section that vanishes when the answer is incomplete reads
+          as a broken page rather than an unfinished one. */}
+      <Attendance
+        speakers={meeting.speakers}
+        unidentified={mapping?.clusters.length ?? 0}
+      />
+
 
       {/* The error text is on the job row for a reason: "ffmpeg is not installed"
           is something the user can act on, and "failed" is not. */}
@@ -142,13 +152,17 @@ export function Meeting({ meetingId }: Props): JSX.Element {
         </p>
       )}
 
-      {/* Above the minutes, because it is the reason there are none. */}
+      {/* Above the minutes, because it is the reason there are none. The id is
+          the target of Attendance's count, not decoration: the count is only
+          worth showing if it leads somewhere. */}
       {needsMapping && mapping && (
-        <SpeakerMapping
-          meetingId={meetingId}
-          mapping={mapping}
-          onResolved={handleResolved}
-        />
+        <div id={MAPPING_ANCHOR}>
+          <SpeakerMapping
+            meetingId={meetingId}
+            mapping={mapping}
+            onResolved={handleResolved}
+          />
+        </div>
       )}
 
       {minutes ? (
@@ -593,22 +607,53 @@ function speakerLabel(speaker: Speaker): string {
  * here would assert that someone by that name attended. And an excluded cluster
  * is a shared video or a noisy line, which by definition did not attend. Both are
  * still speakers in the transcript; neither belongs on a register.
+ *
+ * But "not on the register" is not the same as "not worth saying". A meeting
+ * whose roster never got captured has nothing but clusters, and rendering an
+ * empty section for it told the reader their attendance was missing without ever
+ * saying why — the names look lost rather than unasked-for. So the clusters are
+ * *counted* here and named at the panel below: the register keeps its promise to
+ * hold only real people, and the gap in it is still visible.
  */
-function Attendance({ speakers }: { speakers: Speaker[] }): JSX.Element | null {
+function Attendance({
+  speakers,
+  unidentified,
+}: {
+  speakers: Speaker[];
+  /** Unnamed clusters awaiting the mapping step. Counted, never listed. */
+  unidentified: number;
+}): JSX.Element {
   const ordered = attendees(speakers);
-  if (ordered.length === 0) return null;
 
   return (
     <section>
       <h2>Attendance</h2>
-      <ul className="attendance">
-        {ordered.map((s) => (
-          <li key={s.id} className={s.isLocalUser ? 'attendee you' : 'attendee'}>
-            <span className="dot" aria-hidden="true" />
-            {speakerLabel(s)}
-          </li>
-        ))}
-      </ul>
+
+      {ordered.length > 0 ? (
+        <ul className="attendance">
+          {ordered.map((s) => (
+            <li key={s.id} className={s.isLocalUser ? 'attendee you' : 'attendee'}>
+              <span className="dot" aria-hidden="true" />
+              {speakerLabel(s)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        // Distinct from the "voices not identified" line below, which is about
+        // clusters waiting on a name. This is the case where the meeting UI never
+        // told us who was there at all, so there is not even a question to answer.
+        unidentified === 0 && <p className="muted">Nobody was recorded in this meeting.</p>
+      )}
+
+      {unidentified > 0 && (
+        <p className="unidentified">
+          <a href={`#${MAPPING_ANCHOR}`}>
+            {unidentified === 1
+              ? '1 voice is not identified yet'
+              : `${unidentified} voices are not identified yet`}
+          </a>
+        </p>
+      )}
     </section>
   );
 }

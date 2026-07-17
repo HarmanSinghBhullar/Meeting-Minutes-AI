@@ -152,6 +152,22 @@ That is the entire point of the change.
 `getParticipants()` walks `[data-participant-id]` tiles, reads a name, dedupes by
 display name, and keeps the platform's participant id as `external_ref`.
 
+**It is polled, not read once** (`ROSTER_INTERVAL_MS = 5_000`, plus a final read
+inside `stop()`). It used to be called exactly once, in the call stack of the click
+that starts recording, and that read *was* the meeting's cast list. It is wrong in
+both directions: the tile grid may not have rendered yet, in which case the meeting
+has nobody in it for its whole duration; and anyone who joins later never appears
+at all, which is not an edge case — it is how most meetings begin. Newcomers go to
+[`POST .../participants`](api-reference.md#post-apiv1recordingsmeetingsmeeting_idparticipants),
+which merges rather than replaces. The final read matters as much as the timer: the
+service worker finalizes the moment `stop()` returns, so someone who joined in the
+closing seconds has no later chance to be noticed.
+
+`sentParticipants` tracks who has been handed over, keyed by `external_ref` where
+there is one and by name otherwise. It is deliberately **not** seeded with the
+roster `openMeeting` sent — re-sending those costs one request the server discards,
+and buys the repair for the empty-at-click case.
+
 **Self-detection** (`isSelfTile`) uses three signals, any of which suffices: a
 `[data-self-name]` attribute on or in the tile; a match against the page's
 `data-self-name`; or Meet's `(You)` marker in the label or text. `isLocalUser` is
@@ -169,10 +185,13 @@ Presenter turns (`PRESENTER_HOLD_MS = 3_000`) require the indicator to sit insid
 tile, so the toolbar's own "Present now" button does not match.
 
 `SELECTORS.speaking` is `['[data-is-speaking="true"]', '[aria-label*="speaking" i]',
-'.kssMZb']`. The semantic selectors come first and the obfuscated class last —
-`.kssMZb` is from a calibration run on 2026-07-16, and its predecessors `.BlxGDf`
-and `.wnrUse.IisKdb` both rotted. **That rot is the whole story of this project's
-attribution design** ([README](../README.md)).
+'.sxlEM']`. The semantic selectors come first and the obfuscated class last —
+`.sxlEM` is from a calibration run on 2026-07-17, and its predecessors `.BlxGDf`,
+`.wnrUse.IisKdb` and `.kssMZb` all rotted, `.kssMZb` **within a day** of being
+pasted in. **That rot is the whole story of this project's attribution design**
+([README](../README.md)) — and the day it lasted is the argument in miniature: the
+2026-07-17 meeting that produced zero speaker events lost only eval data, because
+pyannote had already taken over attribution.
 
 `checkHealth` warns once, after a 20s grace, if tiles exist but nothing has ever
 looked like speaking — telling the user to run `__meetCalibrate()`.
@@ -275,6 +294,16 @@ the UI.
 
 Attendance filters out clusters and excluded speakers, sorts the local user first,
 and tags them `Name (You)`. An unnamed voice is not attendance.
+
+The section **always renders**, because "who was in this?" is the first question the
+page is asked and a section that disappears when the answer is incomplete reads as a
+broken page rather than an unfinished one. Unnamed clusters are *counted* under the
+register — `N voices are not identified yet`, linking to the mapping panel — never
+listed in it. That keeps both halves honest: the register still holds only real
+people, and the gap in it is visible with the fix one click away. A meeting whose
+roster was never captured ([the roster is load-bearing](#what-the-adapters-are-actually-for-now))
+has nothing but clusters, and this is the state that used to render as nothing at
+all — the names look lost rather than unasked-for.
 
 Each minutes item can show **the lines it came from** — one click from any claim to
 its evidence. An item with `isGrounded === false` renders struck with *"Not

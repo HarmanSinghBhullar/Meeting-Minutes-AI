@@ -86,6 +86,38 @@ recording. Then increments `chunk_count` and refreshes `source_path` /
 
 **Errors:** `404` — `"No {track} track for that meeting."`
 
+### `POST /recordings/meetings/{meeting_id}/participants` → `202`
+
+The roster as the adapter currently reads it, posted every 5s during a recording
+and once more on stop.
+
+**Body** — `SpeakerBatch`: `{ participants: SpeakerIn[] }`, where `SpeakerIn` is
+`{ display_name: string, external_ref?: string | null, is_local_user?: bool }`.
+The **whole list**, not a delta: the client stays dumb and the endpoint decides
+what is new.
+
+**Why it exists:** `open_meeting` reads the roster once, inside the call stack of
+the click that starts recording, and that read is wrong in two ordinary cases —
+the tile grid may not have rendered yet (the meeting then has *nobody* in it for
+its whole duration), and anyone who joins later never appears at all. Both failed
+silently: no attendance, and no candidate offered for their own voice at the
+mapping panel.
+
+**Effects:** matches each participant on `external_ref` first, then
+`display_name`, and inserts a `DOM` speaker for anyone unmatched. Backfills a
+missing `external_ref` onto a row matched by name — that is how someone stays one
+row across a reconnect, and it is the only field this endpoint ever updates.
+
+**Additive only.** It never renames, never deletes, and never touches a row a
+human has ruled on at the mapping panel. The roster arrives on a timer; a person's
+answer does not, and a timer must not be able to overwrite it. A participant who
+renames mid-call keeps the name we first saw — matched by id, so they are not
+duplicated, but not renamed either.
+
+**Response:** `{"created": int}` — how many rows were new.
+
+**Errors:** `404` — `"Meeting not found."`
+
 ### `POST /recordings/meetings/{meeting_id}/speaker-events` → `202`
 
 Batched active-speaker and presenter turns from the content script, flushed every

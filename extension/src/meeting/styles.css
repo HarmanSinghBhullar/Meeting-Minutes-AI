@@ -123,6 +123,24 @@ h2 {
   background: var(--accent);
 }
 
+/* The gap in the register. Muted rather than alarming: unnamed voices are a
+   question waiting on an answer, not an error — and the answer is one click
+   away, so the line is a link rather than a notice. */
+.unidentified {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.unidentified a {
+  color: var(--muted);
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.unidentified a:hover {
+  color: var(--accent);
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
