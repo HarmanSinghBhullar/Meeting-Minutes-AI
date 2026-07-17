@@ -1,0 +1,16 @@
+# Lint rules for code outside `backend/` — which today means `eval/`.
+#
+# ruff discovers config by walking up from each file, so anything under backend/
+# still picks up backend/pyproject.toml and never reaches this file. This exists
+# so that `ruff check eval` from the repository root applies the same rules as the
+# rest of the project instead of silently falling back to ruff's defaults (which
+# are an 88-column line length and a narrower rule set — different enough that
+# eval/ would drift from the house style without anyone choosing that).
+#
+# Keep in step with [tool.ruff] in backend/pyproject.toml.
+
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]

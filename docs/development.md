@@ -5,6 +5,10 @@
 ```bash
 cd backend
 venv/Scripts/python -m pytest
+
+# The evaluation harness has its own suite, at the repository root.
+# No Postgres, no GPU, no API key — it runs anywhere in under a second.
+backend/venv/Scripts/python -m pytest eval
 ```
 
 **Tests need a real Postgres.** [`conftest.py`](../backend/tests/conftest.py)
@@ -158,29 +162,77 @@ internal product names — each in `eval/datasets/<name>/` with the raw `mic.web
 score well while mangling every proper noun in the meeting. Keyword recall is the
 headline number.
 
-**Current state: `eval/metrics.py` defines the metric dataclasses but
-`word_error_rate` and `keyword_recall` both raise `NotImplementedError`, and there
-is no runner.** The dataclasses do encode the intent:
+**Current state: the harness works; the gold set does not exist.** Which means it
+has measured nothing yet, and no accuracy claim in this repository is evidenced.
 
-- `TranscriptionMetrics`: `wer`, `keyword_recall`
-- `AttributionMetrics`: `word_level_accuracy`, `named_speaker_rate`
-- `MinutesMetrics`: action-item and decision precision/recall, plus
-  `grounding_rejection_rate` — with a comment noting that a rejection rate of zero
-  means the grounding pass should be **distrusted, not celebrated**.
+```bash
+python -m eval.runner                # transcribe and score every dataset
+python -m eval.runner --score-only   # score existing hypotheses, no GPU
+python -m pytest eval                # the harness's own tests
+```
 
-> `eval/README.md` is stale: it still describes reporting a DOM attribution path and
-> a pyannote fallback separately. Diarization has been the sole attribution source
-> since the DOM timeline was deleted.
+Gold and hypothesis share **one format** (`eval/transcript.py`) — a hypothesis is a
+transcript the machine wrote, gold is one a human corrected. That is what makes
+scoring a pure function of two files: `--score-only` needs no GPU, no Postgres, and
+no audio, which is why the scoring half has tests and the pipeline-driving half does
+not. It also means bootstrapping gold is a rename plus an afternoon of correcting,
+rather than a week of typing.
+
+Everything except `runner.py` is stdlib-pure and imports no `app` — load-bearing,
+since `app.workers.pipeline` pulls torch and a Whisper backend in at module scope.
+`runner.py` keeps its `app` imports inside the transcribe function, and a test
+asserts `torch` stays out of `sys.modules` on a `--score-only` run.
+
+What it reports, per meeting: `WER`, `keyword` recall, `attrib` (word-level
+attribution accuracy), `named` (named speaker rate), and `voices` (clusters found
+against real people).
+
+**`attrib` and `named` are two questions and neither survives being read alone.**
+The pipeline emits `SPEAKER_00`, not "Priya", so scoring maps each cluster onto the
+gold speaker it most co-occurs with, and `attrib` is computed after that — a cluster
+is a *question*, not a wrong answer, and scoring it as one measures the mapping gate
+instead of the diarizer. The mapping is many-to-one, mirroring `target_speaker_id`'s
+merge, so over-clustering costs `attrib` nothing (`voices` is where that cost shows).
+But the mapping assumes perfect naming by construction, so `attrib` can never be
+evidence the product names anyone correctly. `named` is computed on the raw output
+and is what keeps that honest. Full argument in `eval/scoring.py`.
+
+**`keywords.txt` must never be fed to the model.** `agenda.txt` is the file that
+primes Whisper's decoder. Priming it with the exact rare words keyword recall then
+scores would raise the number and prove nothing.
+
+Not measured yet: **minutes accuracy** (needs an LLM judge — the design argument is
+in `eval/judge.py`, and it is unbuilt because a nondeterministic scorer grading a
+nondeterministic system needs an argument before it needs code), **grounding
+rejection rate** (the cheap half — one query over `MinutesItem.is_grounded`, where
+`NULL` means "not yet run" and must not count as accepted), and **latency**.
+
+`eval/datasets/example/` is committed — synthetic, no audio, five invented lines —
+so the scorer can prove itself with no GPU. `test_example_dataset.py` pins its
+numbers, hand-derived rather than recorded from a run.
 
 ## Code style
 
 ```bash
-venv/Scripts/python -m ruff check .
-venv/Scripts/python -m mypy app
+cd backend && venv/Scripts/python -m ruff check .    # backend/pyproject.toml
+cd backend && venv/Scripts/python -m mypy app
+
+backend/venv/Scripts/python -m ruff check eval       # ruff.toml, from the repo root
+backend/venv/Scripts/python -m mypy                  # mypy.ini, from the repo root
 ```
 
 `ruff` — line length 100, target py311, rules `E, F, I, UP, B`.
 `mypy` — `strict = true`, with the pydantic plugin.
+
+**Two config files, because `eval/` lives outside `backend/`.** Both tools discover
+config by walking up from the file, so nothing under `backend/` ever reaches the
+root `ruff.toml` / `mypy.ini`, and without them `eval/` would silently fall back to
+ruff's defaults and go unchecked by mypy entirely. They mirror `backend/pyproject.toml`
+and must be kept in step with it. `mypy.ini` carries three deliberate deviations,
+each documented in the file: `mypy_path = backend` (mypy does not follow the editable
+install's `.pth`), `python_version = 3.12` (numpy's stubs need it; the venv is 3.12
+anyway), and `follow_imports = silent` for `app.*` (eval is held to its own standard,
+not made responsible for the backend's).
 
 Extension: `npm run typecheck` (`tsc --noEmit`), which `npm run build` runs first.
 `tsconfig.json` adds `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` on
@@ -222,8 +274,11 @@ Collected from across these docs, for anyone looking for something to fix:
 | No retry backoff — 3 attempts burn in ~6 seconds | [pipeline](pipeline.md#the-queue) |
 | No lease timeout/reaper; a killed worker leaves a job `RUNNING` forever | [pipeline](pipeline.md#the-queue) |
 | Reprocessing discards manual per-segment speaker corrections | [pipeline](pipeline.md#persisting-segments) |
-| `eval/metrics.py` functions unimplemented; no runner | [above](#evaluation) |
-| `eval/README.md` still describes the deleted DOM attribution path | [above](#evaluation) |
+| **No gold set exists, so the eval harness has measured nothing** | [above](#evaluation) |
+| Minutes accuracy unmeasured; `eval/judge.py` is design notes only | [above](#evaluation) |
+| Grounding rejection rate not computed, though the data is already persisted | [above](#evaluation) |
+| Latency (finalize → minutes) not timed by the runner | [above](#evaluation) |
+| `backend` ruff reports 66 pre-existing findings; `mypy app` reports 3 | [above](#code-style) |
 | README cites `torch<2.9`; the real bound is `<2.6`, and its install line is unpinned | [operations](operations.md#the-torch-install-is-a-separate-step-and-it-is-the-one-that-goes-wrong) |
 | `TRANSLATION_MODEL` missing from `.env.example` | [configuration](configuration.md#llm) |
 | `vite.config.ts` comment describes an `inlineDynamicImports` that is not there | [extension](extension.md#build) |

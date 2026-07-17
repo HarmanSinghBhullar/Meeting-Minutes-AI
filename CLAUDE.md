@@ -170,8 +170,48 @@ still records active-speaker and presenter events to `SpeakerEvent`; these no
 longer drive attribution and are kept only as evaluation data against the
 diarizer. `SELECTORS.speaking` rotting is therefore no longer a correctness bug.
 
+### The eval harness measures the transcript; nothing measures the minutes yet
+
+`eval/` is built and tested (`python -m pytest eval` — no Postgres, no GPU, under a
+second). **It has measured nothing**, because `eval/datasets/` is empty: the harness
+is a working ruler with nothing to measure, and until real meetings land there, no
+accuracy claim in this repository is evidenced.
+
+- Gold and hypothesis share **one format** (`eval/transcript.py`) — a hypothesis is
+  a transcript the machine wrote; gold is one a human corrected. So scoring is a
+  pure function of two files (`--score-only`: no GPU, no Postgres, no audio), and
+  bootstrapping gold is a rename plus an afternoon of correcting rather than a week
+  of typing. Integer ms everywhere, and no word timings — every metric aligns word
+  *sequences*, so a word inherits its segment's speaker.
+- **Only `runner.py` imports `app`, and only inside the function that transcribes.**
+  Same constraint as everywhere else here: `workers/pipeline` pulls torch and a
+  Whisper backend in at module scope, and a scorer needing a GPU to compare two
+  strings is a scorer nobody runs. A test asserts `torch` stays out of `sys.modules`.
+- **`attrib` and `named` are two questions; reading either alone misleads.** The
+  pipeline emits `SPEAKER_00`, so scoring maps each cluster onto the gold speaker it
+  most co-occurs with — a cluster is a *question*, not a wrong answer, and scoring it
+  as one measures the mapping gate rather than the diarizer. The mapping is
+  many-to-one, mirroring what `target_speaker_id` merges, so over-clustering costs
+  `attrib` nothing (`voices` is where that cost is visible). But it assumes perfect
+  naming by construction, so `attrib` can never show the product names people right.
+  `named` is computed on raw output and is what keeps that honest.
+- **`keywords.txt` is scored, never fed to the model**; `agenda.txt` is the one that
+  primes Whisper's decoder. Priming with the exact words recall is scored on would
+  raise the number and prove nothing.
+- `eval/datasets/example/` is committed (synthetic, no audio) so the scorer can prove
+  itself with no GPU; `.gitignore` allows that one directory and still blocks audio
+  inside it. Its numbers are pinned by hand-derived tests.
+- `ruff.toml` and `mypy.ini` at the repo root exist only because `eval/` sits outside
+  `backend/` and both tools resolve config by walking up. Keep them in step with
+  `backend/pyproject.toml`.
+
 Not yet built:
 
+- Minutes accuracy — `eval/judge.py` is the design argument and no code. It needs an
+  LLM judge, i.e. a nondeterministic scorer grading a nondeterministic system, which
+  needs an argument before it needs an implementation. Grounding rejection rate is
+  the cheap half and needs no judge: one query over `MinutesItem.is_grounded`, where
+  `NULL` means "not yet run" and must not count as accepted.
 - RAG — `services/rag/` and the `INDEX` job are stubbed; `api/v1/routes/qa.py`
   returns `501`. It is deliberately last, since Q&A inherits every upstream error.
 

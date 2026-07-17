@@ -1,0 +1,10 @@
+# The words this meeting turns on: names, products, acronyms.
+# One term per line. Multi-word terms must appear contiguously to count.
+#
+# This file is scored, never fed to the model. Priming Whisper's decoder with the
+# exact rare words we then measure recall on would raise the number and prove
+# nothing. Put the real agenda in agenda.txt instead — see eval/README.md.
+
+ChromaDB
+Kuberya dashboard
+Priya
