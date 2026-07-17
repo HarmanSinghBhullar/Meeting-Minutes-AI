@@ -349,6 +349,83 @@ blockquote p:last-child {
 
 /* --- Transcript --- */
 
+.transcript-head {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+/* One expandable group per minute. The rows are a list you scan, so they get a
+   list's density and separators rather than cards. */
+.minute {
+  border-bottom: 1px solid var(--line);
+}
+
+.minute:first-of-type {
+  border-top: 1px solid var(--line);
+}
+
+.minute-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 10px 4px;
+  cursor: pointer;
+  list-style: none; /* the default triangle; replaced below */
+  user-select: none;
+}
+
+.minute-head::-webkit-details-marker {
+  display: none;
+}
+
+.minute-head:hover {
+  background: var(--quote-bg);
+}
+
+/* A caret we control, so it can sit at a fixed width and keep the time ranges
+   aligned down the column — they are the thing being scanned. */
+.minute-head::before {
+  content: '▸';
+  width: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.12s ease;
+}
+
+.minute[open] > .minute-head::before {
+  transform: rotate(90deg);
+}
+
+.minute-range {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.minute-stats {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Who spoke in this minute, and the reason the row is worth collapsing: it is
+   what lets a reader find the bit they remember without opening every group. */
+.minute-speakers {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.minute-body {
+  padding: 4px 4px 14px 16px;
+}
+
 .transcript p {
   margin: 0 0 6px;
 }

@@ -15,7 +15,7 @@
  * the only thing that makes the clean screen worth anything.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getMeeting, getMinutes, getSpeakerMapping, getTranscript } from '@/lib/api';
 import { SpeakerMapping } from './SpeakerMapping';
 import type {
@@ -30,6 +30,12 @@ import type {
 
 /** How often we re-check while the pipeline is still running. */
 const POLL_INTERVAL_MS = 3_000;
+
+/** The transcript is grouped into buckets this wide. */
+const MINUTE_MS = 60_000;
+
+/** How many speaker names a collapsed minute names before it starts counting. */
+const PREVIEW_SPEAKERS = 2;
 
 const SECTIONS: { type: MinutesItemType; title: string }[] = [
   // Action items first: they are the part somebody has to do something about.
@@ -277,6 +283,20 @@ function Item({
   );
 }
 
+/**
+ * The transcript, collapsed into one expandable group per minute.
+ *
+ * An hour of speech is a thousand lines, and as a flat list it can only be read
+ * by scrolling it — there is no way to see the shape of the meeting or to get
+ * back to the bit you remember. Wall-clock minutes are the coarsest grouping
+ * that is still *navigable*: "around twenty past" is how people actually
+ * remember when something was said, whereas a grouping by speaker or by topic
+ * would be a claim the transcript cannot support.
+ *
+ * So each group is summarised by what a reader needs in order to decide whether
+ * to open it — the time range, how much was said, and who said it — and the
+ * lines themselves are one click away.
+ */
 function Transcript({
   segments,
   speakers,
@@ -284,11 +304,93 @@ function Transcript({
   segments: TranscriptSegment[];
   speakers: Map<string, Speaker>;
 }): JSX.Element {
+  const buckets = useMemo(() => bucketByMinute(segments), [segments]);
+
+  // The first minute opens by default. A section of nothing but collapsed rows
+  // reads as an empty transcript at a glance, and the opening lines are also
+  // the ones most likely to be checked ("did it actually start recording?").
+  const [openMinutes, setOpenMinutes] = useState<Set<number>>(() => {
+    const first = buckets[0];
+    return new Set(first ? [first.minute] : []);
+  });
+
+  const toggle = useCallback((minute: number, isOpen: boolean) => {
+    setOpenMinutes((prev) => {
+      if (prev.has(minute) === isOpen) return prev;
+      const next = new Set(prev);
+      if (isOpen) next.add(minute);
+      else next.delete(minute);
+      return next;
+    });
+  }, []);
+
+  const allOpen = buckets.every((b) => openMinutes.has(b.minute));
+
   return (
     <section>
-      <h2>Transcript</h2>
+      <div className="transcript-head">
+        <h2>Transcript</h2>
+        {/* Reading the whole thing straight through is a real use — and the
+            answer to "where was that?" is often Ctrl+F, which cannot find text
+            inside a collapsed group. */}
+        <button
+          type="button"
+          className="link"
+          onClick={() =>
+            setOpenMinutes(allOpen ? new Set() : new Set(buckets.map((b) => b.minute)))
+          }
+        >
+          {allOpen ? 'Collapse all' : 'Expand all'}
+        </button>
+      </div>
+
       <div className="transcript">
-        {segments.map((seg) => (
+        {buckets.map((bucket) => (
+          <MinuteGroup
+            key={bucket.minute}
+            bucket={bucket}
+            speakers={speakers}
+            isOpen={openMinutes.has(bucket.minute)}
+            onToggle={toggle}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MinuteGroup({
+  bucket,
+  speakers,
+  isOpen,
+  onToggle,
+}: {
+  bucket: MinuteBucket;
+  speakers: Map<string, Speaker>;
+  isOpen: boolean;
+  onToggle: (minute: number, isOpen: boolean) => void;
+}): JSX.Element {
+  const names = bucketSpeakers(bucket.segments, speakers);
+  const count = bucket.segments.length;
+
+  return (
+    // <details> rather than a hand-rolled disclosure: it is keyboard-operable
+    // and screen-reader-legible for free, and browsers already know what it is.
+    <details
+      className="minute"
+      open={isOpen}
+      onToggle={(e) => onToggle(bucket.minute, e.currentTarget.open)}
+    >
+      <summary className="minute-head">
+        <span className="minute-range">{formatRange(bucket.minute)}</span>
+        <span className="minute-stats">
+          {count} line{count === 1 ? '' : 's'}
+        </span>
+        <span className="minute-speakers">{previewSpeakers(names)}</span>
+      </summary>
+
+      <div className="minute-body">
+        {bucket.segments.map((seg) => (
           <p key={seg.id}>
             <span className="ts">{formatTime(seg.startMs)}</span>{' '}
             <span
@@ -304,8 +406,66 @@ function Transcript({
           </p>
         ))}
       </div>
-    </section>
+    </details>
   );
+}
+
+interface MinuteBucket {
+  /** Minutes since the recording started. */
+  minute: number;
+  segments: TranscriptSegment[];
+}
+
+/**
+ * Group segments into the wall-clock minute they *started* in.
+ *
+ * Bucketing on the start alone means a segment that straddles a boundary lands
+ * in one group and only one — the alternative, showing it in both, would make
+ * the line counts lie and let a reader see the same sentence twice and wonder
+ * whether it was said twice.
+ *
+ * Minutes in which nobody spoke get no group at all. Rendering them as empty
+ * rows would pad a meeting with a long silence in it with rows that say
+ * nothing, and the range labels already make the gap obvious.
+ */
+function bucketByMinute(segments: TranscriptSegment[]): MinuteBucket[] {
+  const byMinute = new Map<number, TranscriptSegment[]>();
+
+  for (const seg of segments) {
+    const minute = Math.floor(seg.startMs / MINUTE_MS);
+    const existing = byMinute.get(minute);
+    if (existing) existing.push(seg);
+    else byMinute.set(minute, [seg]);
+  }
+
+  // The API returns segments in start order, so each bucket is already ordered;
+  // only the buckets themselves need sorting.
+  return [...byMinute.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([minute, segs]) => ({ minute, segments: segs }));
+}
+
+/** The distinct speakers in a group, in the order they first spoke. */
+function bucketSpeakers(
+  segments: TranscriptSegment[],
+  speakers: Map<string, Speaker>,
+): string[] {
+  const names: string[] = [];
+  for (const seg of segments) {
+    const name = speakerName(seg, speakers);
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function previewSpeakers(names: string[]): string {
+  if (names.length <= PREVIEW_SPEAKERS + 1) return names.join(', ');
+  const shown = names.slice(0, PREVIEW_SPEAKERS).join(', ');
+  return `${shown} +${names.length - PREVIEW_SPEAKERS} more`;
+}
+
+function formatRange(minute: number): string {
+  return `${formatTime(minute * MINUTE_MS)} – ${formatTime((minute + 1) * MINUTE_MS)}`;
 }
 
 function speakerName(seg: TranscriptSegment, speakers: Map<string, Speaker>): string {

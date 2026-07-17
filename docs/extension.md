@@ -246,6 +246,15 @@ One page, two views, routed on `?id=`:
   minutes, transcript, and the mapping UI. One `Promise.all` over four endpoints;
   polls every 3s while jobs are pending.
 
+The **transcript is grouped into one collapsible `<details>` per wall-clock
+minute**, bucketed on each segment's `startMs` so no line appears twice and the
+counts do not lie. A minute nobody spoke in gets no group — empty rows would pad
+out a long silence and say nothing. Each collapsed group carries what a reader
+needs to decide whether to open it: the range, the line count, and who spoke.
+The first opens by default (a wall of collapsed rows reads as an empty
+transcript), and *Expand all* exists because Ctrl+F cannot find text inside a
+closed group.
+
 `StatusBadge` precedence: running → `{type}…`; failed → `{type} failed`; **unmapped
 > 0 → `Needs speakers (N)`**; ground succeeded → `Minutes ready`; else
 `Transcribed`. The unmapped count is derived straight off `meeting.speakers`

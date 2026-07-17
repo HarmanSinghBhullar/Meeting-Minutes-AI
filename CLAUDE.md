@@ -164,6 +164,12 @@ summary is stored and shown as point-wise bullets (`Minutes` heading), and
 attendees appear under an `Attendance` heading tagged `Name (You)` for the local
 user — excluding unnamed clusters and excluded ones, which are not attendance.
 
+The transcript below them is grouped into a collapsible `<details>` per
+wall-clock minute (`Meeting.tsx`, `bucketByMinute`), summarised by range, line
+count and speakers, with the first open and an `Expand all` for Ctrl+F. Segments
+bucket on `startMs` only, so a segment straddling a boundary lands in exactly one
+group; silent minutes get no row.
+
 The Meet adapter still identifies the local user (via `data-self-name` or Meet's
 "(You)" marker) so their track is named rather than an invented "You". It also
 still records active-speaker and presenter events to `SpeakerEvent`; these no
