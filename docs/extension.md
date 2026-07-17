@@ -255,6 +255,17 @@ The first opens by default (a wall of collapsed rows reads as an empty
 transcript), and *Expand all* exists because Ctrl+F cannot find text inside a
 closed group.
 
+**Transcript search** is the other half of that bargain. Typing narrows each
+group to its matching lines, drops the groups with none, opens what is left —
+a hit inside a collapsed group is a hit you cannot read — and marks the runs.
+The **speaker's name matches too**: "what did Harry say" is at least as common a
+question as "where was ChromaDB mentioned", and the name is on screen, so
+typing it has every reason to work. While a search is active a group reports
+`3 of 11` rather than `11 lines`, and the header counts *lines*, not hits — a
+line matching on both its speaker and its words highlights twice, and a count
+that says "matches" over a different number is exactly the sort of small lie
+this page is in the business of not telling.
+
 `StatusBadge` precedence: running → `{type}…`; failed → `{type} failed`; **unmapped
 > 0 → `Needs speakers (N)`**; ground succeeded → `Minutes ready`; else
 `Transcribed`. The unmapped count is derived straight off `meeting.speakers`

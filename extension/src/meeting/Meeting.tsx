@@ -118,8 +118,10 @@ export function Meeting({ meetingId }: Props): JSX.Element {
       </p>
       <header>
         <h1>{meeting.title ?? 'Untitled meeting'}</h1>
-        <p className="muted">
-          {meeting.startedAt ? new Date(meeting.startedAt).toLocaleString() : 'Date unknown'}
+        <p className="facts">
+          {meetingFacts(meeting, transcript).map((fact, i) => (
+            <span key={i}>{fact}</span>
+          ))}
         </p>
       </header>
 
@@ -304,7 +306,26 @@ function Transcript({
   segments: TranscriptSegment[];
   speakers: Map<string, Speaker>;
 }): JSX.Element {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+
   const buckets = useMemo(() => bucketByMinute(segments), [segments]);
+
+  // Searching narrows each group to its matching lines and drops the groups
+  // with none. The line count then has to say so — "11 lines" over a group
+  // showing two would be a small lie, and this page is in the business of not
+  // telling those.
+  const visible = useMemo(() => {
+    if (!q) return buckets;
+    const out: MinuteBucket[] = [];
+    for (const bucket of buckets) {
+      const hits = bucket.segments.filter((seg) => segmentMatches(seg, speakers, q));
+      if (hits.length > 0) out.push({ ...bucket, segments: hits });
+    }
+    return out;
+  }, [buckets, q, speakers]);
+
+  const matches = q ? visible.reduce((n, b) => n + b.segments.length, 0) : 0;
 
   // The first minute opens by default. A section of nothing but collapsed rows
   // reads as an empty transcript at a glance, and the opening lines are also
@@ -313,6 +334,14 @@ function Transcript({
     const first = buckets[0];
     return new Set(first ? [first.minute] : []);
   });
+
+  // A hit inside a collapsed group is a hit you cannot read. Opening the
+  // matches is the whole reason this search exists rather than leaving people
+  // to Ctrl+F, which cannot see into a closed <details> at all.
+  useEffect(() => {
+    if (!q) return;
+    setOpenMinutes(new Set(visible.map((b) => b.minute)));
+  }, [q, visible]);
 
   const toggle = useCallback((minute: number, isOpen: boolean) => {
     setOpenMinutes((prev) => {
@@ -324,36 +353,59 @@ function Transcript({
     });
   }, []);
 
-  const allOpen = buckets.every((b) => openMinutes.has(b.minute));
+  const allOpen = visible.length > 0 && visible.every((b) => openMinutes.has(b.minute));
 
   return (
     <section>
       <div className="transcript-head">
         <h2>Transcript</h2>
-        {/* Reading the whole thing straight through is a real use — and the
-            answer to "where was that?" is often Ctrl+F, which cannot find text
-            inside a collapsed group. */}
-        <button
-          type="button"
-          className="link"
-          onClick={() =>
-            setOpenMinutes(allOpen ? new Set() : new Set(buckets.map((b) => b.minute)))
-          }
-        >
-          {allOpen ? 'Collapse all' : 'Expand all'}
-        </button>
+
+        <input
+          // type=search for the browser's own clear button — a control we would
+          // otherwise have to build, and one people already know.
+          type="search"
+          className="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search the transcript…"
+          aria-label="Search the transcript"
+        />
+
+        {q ? (
+          // "matches" would be read as hits, and a line matching on both its
+          // speaker and its words highlights twice — so count what is actually
+          // being counted, in the same unit the groups report.
+          <span className="muted count">
+            {matches} line{matches === 1 ? '' : 's'}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="link"
+            onClick={() =>
+              setOpenMinutes(allOpen ? new Set() : new Set(buckets.map((b) => b.minute)))
+            }
+          >
+            {allOpen ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
       </div>
 
       <div className="transcript">
-        {buckets.map((bucket) => (
-          <MinuteGroup
-            key={bucket.minute}
-            bucket={bucket}
-            speakers={speakers}
-            isOpen={openMinutes.has(bucket.minute)}
-            onToggle={toggle}
-          />
-        ))}
+        {visible.length === 0 ? (
+          <p className="muted empty">Nothing in this transcript matches “{query.trim()}”.</p>
+        ) : (
+          visible.map((bucket) => (
+            <MinuteGroup
+              key={bucket.minute}
+              bucket={bucket}
+              speakers={speakers}
+              query={q}
+              isOpen={openMinutes.has(bucket.minute)}
+              onToggle={toggle}
+            />
+          ))
+        )}
       </div>
     </section>
   );
@@ -362,16 +414,18 @@ function Transcript({
 function MinuteGroup({
   bucket,
   speakers,
+  query,
   isOpen,
   onToggle,
 }: {
   bucket: MinuteBucket;
   speakers: Map<string, Speaker>;
+  query: string;
   isOpen: boolean;
   onToggle: (minute: number, isOpen: boolean) => void;
 }): JSX.Element {
   const names = bucketSpeakers(bucket.segments, speakers);
-  const count = bucket.segments.length;
+  const shown = bucket.segments.length;
 
   return (
     // <details> rather than a hand-rolled disclosure: it is keyboard-operable
@@ -384,7 +438,9 @@ function MinuteGroup({
       <summary className="minute-head">
         <span className="minute-range">{formatRange(bucket.minute)}</span>
         <span className="minute-stats">
-          {count} line{count === 1 ? '' : 's'}
+          {query
+            ? `${shown} of ${bucket.total}`
+            : `${bucket.total} line${bucket.total === 1 ? '' : 's'}`}
         </span>
         <span className="minute-speakers">{previewSpeakers(names)}</span>
       </summary>
@@ -400,9 +456,9 @@ function MinuteGroup({
               // do that if they can see which ones are uncertain.
               title={`Speaker source: ${seg.speakerSource}`}
             >
-              {speakerName(seg, speakers)}:
+              <Highlight text={speakerName(seg, speakers)} query={query} />:
             </span>{' '}
-            {seg.textEn ?? seg.text}
+            <Highlight text={seg.textEn ?? seg.text} query={query} />
           </p>
         ))}
       </div>
@@ -410,10 +466,50 @@ function MinuteGroup({
   );
 }
 
+/** The matched runs of `text`, marked. `query` is already lowercased. */
+function Highlight({ text, query }: { text: string; query: string }): JSX.Element {
+  if (!query) return <>{text}</>;
+
+  const haystack = text.toLowerCase();
+  const parts: JSX.Element[] = [];
+  let cursor = 0;
+  let at = haystack.indexOf(query);
+  let key = 0;
+
+  while (at !== -1) {
+    if (at > cursor) parts.push(<span key={key++}>{text.slice(cursor, at)}</span>);
+    parts.push(<mark key={key++}>{text.slice(at, at + query.length)}</mark>);
+    cursor = at + query.length;
+    at = haystack.indexOf(query, cursor);
+  }
+  if (parts.length === 0) return <>{text}</>;
+  if (cursor < text.length) parts.push(<span key={key++}>{text.slice(cursor)}</span>);
+
+  return <>{parts}</>;
+}
+
+/**
+ * Does a line match the search?
+ *
+ * The speaker's name counts, not just the words: "what did Harry say" is at
+ * least as common a question as "where was ChromaDB mentioned", and the name is
+ * on screen, so a reader has every reason to expect typing it to work.
+ */
+function segmentMatches(
+  seg: TranscriptSegment,
+  speakers: Map<string, Speaker>,
+  query: string,
+): boolean {
+  if ((seg.textEn ?? seg.text).toLowerCase().includes(query)) return true;
+  return speakerName(seg, speakers).toLowerCase().includes(query);
+}
+
 interface MinuteBucket {
   /** Minutes since the recording started. */
   minute: number;
   segments: TranscriptSegment[];
+  /** Lines in this minute before any search narrowed it. */
+  total: number;
 }
 
 /**
@@ -442,7 +538,7 @@ function bucketByMinute(segments: TranscriptSegment[]): MinuteBucket[] {
   // only the buckets themselves need sorting.
   return [...byMinute.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([minute, segs]) => ({ minute, segments: segs }));
+    .map(([minute, segs]) => ({ minute, segments: segs, total: segs.length }));
 }
 
 /** The distinct speakers in a group, in the order they first spoke. */
@@ -499,25 +595,95 @@ function speakerLabel(speaker: Speaker): string {
  * still speakers in the transcript; neither belongs on a register.
  */
 function Attendance({ speakers }: { speakers: Speaker[] }): JSX.Element | null {
-  const attended = speakers.filter(
-    (s) => s.source !== 'diarization' && !s.isExcluded,
-  );
-  if (attended.length === 0) return null;
-
-  const ordered = [...attended].sort(
-    (a, b) => Number(b.isLocalUser) - Number(a.isLocalUser),
-  );
+  const ordered = attendees(speakers);
+  if (ordered.length === 0) return null;
 
   return (
     <section>
       <h2>Attendance</h2>
       <ul className="attendance">
         {ordered.map((s) => (
-          <li key={s.id}>{speakerLabel(s)}</li>
+          <li key={s.id} className={s.isLocalUser ? 'attendee you' : 'attendee'}>
+            <span className="dot" aria-hidden="true" />
+            {speakerLabel(s)}
+          </li>
         ))}
       </ul>
     </section>
   );
+}
+
+/** Who attended, the local user first. See the note on Attendance for who isn't. */
+function attendees(speakers: Speaker[]): Speaker[] {
+  return speakers
+    .filter((s) => s.source !== 'diarization' && !s.isExcluded)
+    .sort((a, b) => Number(b.isLocalUser) - Number(a.isLocalUser));
+}
+
+/**
+ * The one-line summary under the title: when, how long, how many people, how
+ * much was said.
+ *
+ * Each fact is dropped rather than faked when it is not known yet — a meeting
+ * still transcribing has no line count, and "0 lines" would read as a finished
+ * meeting in which nobody spoke.
+ */
+function meetingFacts(meeting: MeetingModel, transcript: TranscriptSegment[]): string[] {
+  const facts: string[] = [];
+
+  facts.push(
+    meeting.startedAt
+      ? // Not toLocaleString(): its seconds are noise on a fact about which
+        // afternoon this was.
+        new Date(meeting.startedAt).toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        })
+      : 'Date unknown',
+  );
+
+  const duration = meetingDuration(meeting, transcript);
+  if (duration) facts.push(duration);
+
+  const people = attendees(meeting.speakers).length;
+  if (people > 0) facts.push(`${people} speaker${people === 1 ? '' : 's'}`);
+
+  if (transcript.length > 0) {
+    facts.push(`${transcript.length} line${transcript.length === 1 ? '' : 's'}`);
+  }
+
+  return facts;
+}
+
+/**
+ * How long the meeting ran.
+ *
+ * Measured from the transcript where there is one: the last word is when the
+ * meeting effectively ended, whereas ended_at includes however long it took the
+ * user to notice and hit stop. Falls back to the recorded times before there is
+ * a transcript to ask.
+ */
+function meetingDuration(
+  meeting: MeetingModel,
+  transcript: TranscriptSegment[],
+): string | null {
+  const lastWord = transcript.reduce((max, seg) => Math.max(max, seg.endMs), 0);
+  if (lastWord > 0) return formatDuration(lastWord);
+
+  if (meeting.startedAt && meeting.endedAt) {
+    const ms = new Date(meeting.endedAt).getTime() - new Date(meeting.startedAt).getTime();
+    if (ms > 0) return formatDuration(ms);
+  }
+  return null;
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / MINUTE_MS);
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
 /**

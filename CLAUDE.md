@@ -168,7 +168,10 @@ The transcript below them is grouped into a collapsible `<details>` per
 wall-clock minute (`Meeting.tsx`, `bucketByMinute`), summarised by range, line
 count and speakers, with the first open and an `Expand all` for Ctrl+F. Segments
 bucket on `startMs` only, so a segment straddling a boundary lands in exactly one
-group; silent minutes get no row.
+group; silent minutes get no row. Searching narrows each group to its matching
+lines (text *or* speaker name), opens the survivors, marks the hits, and reports
+`3 of 11` per group — the header counts lines rather than "matches", since one
+line can highlight twice.
 
 The Meet adapter still identifies the local user (via `data-self-name` or Meet's
 "(You)" marker) so their track is named rather than an invented "You". It also
