@@ -38,6 +38,14 @@ AI:
 - Add comments and docstrings
 - Follow production-grade folder structure
 
+## Documentation
+
+`README.md` carries the argument (why the system is shaped this way). `docs/` is
+the reference set — `architecture.md`, `data-model.md`, `api-reference.md`,
+`pipeline.md`, `extension.md`, `configuration.md`, `operations.md`,
+`development.md`. Both, and the section below, are kept current in the same change
+that changes the behaviour. `docs/development.md` also tracks the known gaps.
+
 ## Current status
 
 Keep this section current as features land — update it in the same change that

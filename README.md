@@ -54,6 +54,14 @@ minutes you cannot check are minutes you eventually stop trusting.
 **Accuracy is measured, not asserted.** See [`eval/`](eval/README.md). Without a
 gold set, every change is a coin flip you cannot evaluate.
 
+## Documentation
+
+This page is the argument. [`docs/`](docs/README.md) is the reference:
+[architecture](docs/architecture.md), [data model](docs/data-model.md),
+[API](docs/api-reference.md), [pipeline](docs/pipeline.md),
+[extension](docs/extension.md), [configuration](docs/configuration.md),
+[operations](docs/operations.md), and [development](docs/development.md).
+
 ## Stack
 
 | Layer | Choice | Why |
