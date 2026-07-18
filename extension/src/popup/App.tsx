@@ -12,13 +12,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { listMeetings } from '@/lib/api';
-import type { ExtensionMessage, Meeting, RecordingState } from '@/lib/types';
+import { DEFAULT_SETTINGS, getSettings, updateSettings } from '@/lib/settings';
+import type { ExtensionMessage, Meeting, RecordingState, Settings } from '@/lib/types';
 
 export function App(): JSX.Element {
   const [state, setState] = useState<RecordingState>({ isRecording: false });
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [micGranted, setMicGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   const refresh = useCallback(async () => {
     try {
@@ -44,7 +46,15 @@ export function App(): JSX.Element {
       .query({ name: 'microphone' as PermissionName })
       .then((status) => setMicGranted(status.state === 'granted'))
       .catch(() => setMicGranted(true)); // can't tell — don't nag
+
+    void getSettings().then(setSettings);
   }, [refresh]);
+
+  /** Persist one setting and reflect it immediately, so the toggle never lags. */
+  async function toggleSetting(key: keyof Settings): Promise<void> {
+    const next = await updateSettings({ [key]: !settings[key] });
+    setSettings(next);
+  }
 
   async function toggle(): Promise<void> {
     setError(null);
@@ -129,6 +139,42 @@ export function App(): JSX.Element {
       )}
 
       {error && <p style={{ fontSize: 12, color: '#d93025' }}>{error}</p>}
+
+      <fieldset
+        style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, marginTop: 12 }}
+      >
+        <legend style={{ fontSize: 11, color: '#6b7280', padding: '0 4px' }}>
+          Auto-record
+        </legend>
+        <label style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'flex-start' }}>
+          <input
+            type="checkbox"
+            checked={settings.autoPromptOnJoin}
+            onChange={() => void toggleSetting('autoPromptOnJoin')}
+          />
+          <span>
+            Highlight the icon when I join a meeting
+            <span style={{ display: 'block', color: '#6b7280' }}>
+              A nudge only — recording still needs your click.
+            </span>
+          </span>
+        </label>
+        <label
+          style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'flex-start', marginTop: 8 }}
+        >
+          <input
+            type="checkbox"
+            checked={settings.autoStopOnLeave}
+            onChange={() => void toggleSetting('autoStopOnLeave')}
+          />
+          <span>
+            Stop automatically when the meeting ends
+            <span style={{ display: 'block', color: '#6b7280' }}>
+              Finalizes the recording when you leave or close the tab.
+            </span>
+          </span>
+        </label>
+      </fieldset>
 
       <button
         type="button"

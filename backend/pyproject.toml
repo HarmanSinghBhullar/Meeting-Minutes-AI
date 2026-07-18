@@ -29,10 +29,12 @@ dependencies = [
     "nvidia-cublas-cu12; sys_platform == 'win32'",
     "nvidia-cudnn-cu12; sys_platform == 'win32'",
 
-    # LLM (minutes, grounding, translation). Both are installed; which one runs
-    # is the LLM_PROVIDER setting. They are small, pure-Python HTTP clients —
-    # carrying the unused one costs nothing and keeps provider A/B testing on the
-    # evaluation set a config change rather than a reinstall.
+    # LLM (minutes, grounding, translation). All are installed; which one runs is
+    # the LLM_PROVIDER setting. They are small, pure-Python HTTP clients — carrying
+    # the unused ones costs nothing and keeps provider A/B testing on the evaluation
+    # set a config change rather than a reinstall.
+    "groq>=0.11",
+    "google-genai>=1.0",
     "openai>=1.60",
     "anthropic>=0.40",
 ]

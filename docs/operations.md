@@ -213,8 +213,8 @@ syntax error in a content script, and the failure is silent. See the
 
 Everything is local: Postgres on your machine, audio under `STORAGE_DIR`, no
 service in between. The exceptions are the LLM calls — **transcript text is sent to
-OpenAI or Anthropic** for translation, minutes, and grounding. Audio never leaves
-the machine.
+the configured LLM provider** (Groq by default; Google, OpenAI, or Anthropic if
+selected) for translation, minutes, and grounding. Audio never leaves the machine.
 
 `.gitignore` covers `storage/`, `chroma/`, `models/`, `.env`, and
 `eval/datasets/` — the last one because real meeting audio must never be committed.

@@ -32,6 +32,7 @@ import {
   postParticipants,
   postSpeakerEvents,
 } from '@/lib/api';
+import { getSettings } from '@/lib/settings';
 import type {
   ExtensionMessage,
   MeetingContext,
@@ -113,14 +114,42 @@ async function saveSession(session: RecordingSession | null): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: ExtensionMessage, _sender, sendResponse: (response?: unknown) => void) => {
+  (message: ExtensionMessage, sender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
+      case 'MEETING_JOINED':
+        // The sender's own tab is the one in a call — trust the sender, not any
+        // "active tab", since the meeting may not be focused.
+        void onMeetingJoined(sender.tab?.id);
+        return false;
+
+      case 'MEETING_LEFT':
+        void onMeetingLeft(sender.tab?.id);
+        return false;
+
       case 'START_RECORDING':
         void startRecording(message.tabId).then(
           () => sendResponse({ ok: true }),
           (err: unknown) => sendResponse({ ok: false, error: String(err) }),
         );
         return true; // async response
+
+      case 'REQUEST_START_RECORDING': {
+        // The in-page panel's Start button. It cannot know its own tab id, so we
+        // take it from the sender. Same recorder path as the popup; the only
+        // difference is where the click came from — and Chrome may refuse tab
+        // capture that did not originate in a toolbar-click gesture, which surfaces
+        // as a start error the panel then explains.
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          sendResponse({ ok: false, error: 'No tab to record.' });
+          return false;
+        }
+        void startRecording(tabId).then(
+          () => sendResponse({ ok: true }),
+          (err: unknown) => sendResponse({ ok: false, error: friendlyStartError(err) }),
+        );
+        return true;
+      }
 
       case 'STOP_RECORDING':
         void stopRecording().then(
@@ -131,6 +160,20 @@ chrome.runtime.onMessage.addListener(
 
       case 'GET_RECORDING_STATE':
         void currentState().then(sendResponse);
+        return true;
+
+      case 'GET_SETTINGS':
+        // The content script reads settings through here rather than importing
+        // `lib/settings`, which would make its classic-script bundle pull an
+        // unexecutable `import`. The worker is a module, so it can own the read.
+        void getSettings().then(sendResponse);
+        return true;
+
+      case 'GET_START_SHORTCUT':
+        // The actual bound shortcut, so the panel shows what really works — the
+        // suggested key may be unbound (taken by another extension) or rebound by
+        // the user at chrome://extensions/shortcuts.
+        void startShortcut().then(sendResponse);
         return true;
 
       case 'SPEAKER_EVENTS': {
@@ -158,6 +201,22 @@ chrome.runtime.onMessage.addListener(
     }
   },
 );
+
+// Closing the meeting tab is a leave the content script can no longer report — it
+// went with the tab. This is the backstop that finalizes a recording whose tab was
+// closed outright rather than left via the UI. Registered at the top level so the
+// event can wake an evicted worker.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void onRecordingTabClosed(tabId);
+});
+
+// The keyboard shortcut. This is the *only* way, besides the toolbar click, to
+// begin recording with the gesture Chrome demands for tab capture — the in-page
+// panel's button cannot, because a click in the page does not invoke the extension.
+// So the panel teaches this shortcut, and here is where the key press lands.
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'toggle-recording') void onToggleShortcut();
+});
 
 async function startRecording(tabId: number): Promise<void> {
   await ensureOffscreenDocument();
@@ -211,8 +270,8 @@ async function startRecording(tabId: number): Promise<void> {
 
   // Not decoration. Recording people without their knowledge is illegal in
   // two-party-consent jurisdictions, so the fact of it must be impossible to miss.
-  await chrome.action.setBadgeText({ text: 'REC' });
-  await chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
+  // This also overwrites any green "click to record" nudge with the REC badge.
+  await showRecordingBadge();
 }
 
 /**
@@ -261,10 +320,150 @@ async function stopRecording(): Promise<void> {
     if (meetingId) await finalizeMeeting(meetingId);
   } finally {
     // Whatever failed above, the UI must not be left claiming to record — and the
-    // next Start must not be blocked by a recording that is already over.
+    // next Start must not be blocked by a recording that is already over. The badge
+    // is cleared rather than returned to the green nudge: someone who just stopped
+    // does not want to be immediately re-invited to record the same call.
     await saveSession(null);
-    await chrome.action.setBadgeText({ text: '' });
+    await clearBadge();
   }
+}
+
+/**
+ * The user joined a call: nudge them to record it, but never record on their
+ * behalf. The nudge is a badge on the toolbar icon, not a recording — starting one
+ * requires the deliberate click that consent (and Chrome's gesture rule) demand.
+ *
+ * Skipped when a recording is already running: its REC badge owns the icon, and a
+ * green "click to record" over a live recording would be a lie.
+ */
+async function onMeetingJoined(tabId: number | undefined): Promise<void> {
+  if (tabId === undefined) return; // not from a tab; nothing to nudge about
+
+  const { autoPromptOnJoin } = await getSettings();
+  if (!autoPromptOnJoin) return;
+
+  if ((await currentState()).isRecording) return;
+
+  await showRecordPrompt();
+}
+
+/**
+ * The user left a call. Two cases, told apart by whether the recording lives on
+ * the tab they left:
+ *
+ *   - It does, and `autoStopOnLeave` is on → stop and finalize. Leaving the
+ *     meeting is the clearest possible "I'm done" signal, and a recording that
+ *     runs on past the call it was capturing only accumulates silence and risks
+ *     never being stopped at all.
+ *   - It does not (nothing recording, or recording on another tab) → the green
+ *     nudge, if any, is now stale, so clear it — but only when nothing is
+ *     recording, so a REC badge for a recording elsewhere is left untouched.
+ */
+async function onMeetingLeft(tabId: number | undefined): Promise<void> {
+  if (tabId === undefined) return;
+
+  const session = await loadSession();
+  if (session && session.tabId === tabId) {
+    const { autoStopOnLeave } = await getSettings();
+    if (autoStopOnLeave) {
+      console.info('[worker] call ended on the recording tab (%d) — finalizing.', tabId);
+      await stopRecording(); // clears the badge in its own finally
+    }
+    // If auto-stop is off, the recording continues by the user's preference and
+    // its REC badge stays put.
+    return;
+  }
+
+  if (!(await currentState()).isRecording) await clearBadge();
+}
+
+/**
+ * The tab hosting the live recording was closed. The content script cannot report
+ * this leave — it died with the tab — so this is the only signal left. Finalize,
+ * so a closed tab does not strand a recording that never gets transcribed.
+ */
+async function onRecordingTabClosed(tabId: number): Promise<void> {
+  const session = await loadSession();
+  if (!session || session.tabId !== tabId) return;
+
+  const { autoStopOnLeave } = await getSettings();
+  if (!autoStopOnLeave) return;
+
+  console.info('[worker] recording tab %d was closed — finalizing.', tabId);
+  await stopRecording();
+}
+
+/**
+ * The keyboard shortcut fired: stop if recording, otherwise record the active tab.
+ *
+ * `onCommand` runs with a user gesture and grants activeTab for the focused tab —
+ * which is precisely what `getMediaStreamId` needs and what the in-page panel's
+ * click cannot supply. So this is the reliable start path, and toggling keeps it to
+ * one binding for both directions.
+ */
+async function onToggleShortcut(): Promise<void> {
+  if ((await currentState()).isRecording) {
+    await stopRecording();
+    return;
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id === undefined) return;
+
+  try {
+    await startRecording(tab.id);
+  } catch (err: unknown) {
+    // A shortcut has no UI to show an error in; the tab's content script does.
+    console.error('[worker] shortcut start failed', err);
+  }
+}
+
+/** The shortcut actually bound to `toggle-recording`, or '' if none is. */
+async function startShortcut(): Promise<string> {
+  const commands = await chrome.commands.getAll();
+  return commands.find((c) => c.name === 'toggle-recording')?.shortcut ?? '';
+}
+
+/** Badge text for the two states the icon advertises. */
+const PROMPT_BADGE = '●';
+const RECORDING_BADGE = 'REC';
+
+/** Green: a meeting is here and one click away from being recorded. */
+async function showRecordPrompt(): Promise<void> {
+  await chrome.action.setBadgeText({ text: PROMPT_BADGE });
+  await chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' });
+  await chrome.action.setTitle({ title: 'Meeting detected — click to record' });
+}
+
+/** Red: recording, and unmissably so. */
+async function showRecordingBadge(): Promise<void> {
+  await chrome.action.setBadgeText({ text: RECORDING_BADGE });
+  await chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
+  await chrome.action.setTitle({ title: 'Recording — click to stop' });
+}
+
+/** Back to the resting state: no badge, default tooltip. */
+async function clearBadge(): Promise<void> {
+  await chrome.action.setBadgeText({ text: '' });
+  await chrome.action.setTitle({ title: 'Meeting Intelligence' });
+}
+
+/**
+ * Turn a start failure into something the in-page panel can show a human.
+ *
+ * The one worth translating is Chrome's refusal to capture a tab from a click that
+ * did not happen on the extension's own toolbar button: `getMediaStreamId` reports
+ * it as "extension has not been invoked", which means nothing to a user. The panel
+ * already tells them the fix (click the icon), so here we just make the reason
+ * legible. Everything else is passed through — a backend error or a busy recorder
+ * says something useful on its own.
+ */
+function friendlyStartError(err: unknown): string {
+  const message = String(err);
+  if (/not been invoked|user gesture|activeTab/i.test(message)) {
+    return 'Chrome only allows recording to start from the extension icon on this page.';
+  }
+  return message;
 }
 
 /**
@@ -283,7 +482,7 @@ async function currentState(): Promise<RecordingState> {
     if (session) {
       console.warn('[worker] the recorder is gone; clearing the recording.');
       await saveSession(null);
-      await chrome.action.setBadgeText({ text: '' });
+      await clearBadge();
     }
     return { isRecording: false };
   }

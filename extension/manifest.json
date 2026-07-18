@@ -30,6 +30,13 @@
     "default_title": "Meeting Intelligence"
   },
 
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Start or stop recording the current meeting"
+    }
+  },
+
   "content_scripts": [
     {
       "matches": [

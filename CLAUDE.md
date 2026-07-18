@@ -56,7 +56,9 @@ of the tab track → word-level alignment → attributed segments in Postgres �
 translation for non-English meetings (`services/translation.py`, batched through
 the same structured-LLM provider as the minutes; writes `Segment.text_en`, never
 over `text`) → **speaker mapping (a human step — see below)** → cited minutes
-(`services/minutes/`, OpenAI + Anthropic providers) → grounding pass.
+(`services/minutes/`, Groq/Google/OpenAI/Anthropic providers; `LLM_PROVIDER`
+selects, default `groq` — free and fast; its structured output is JSON mode gated
+by Pydantic rather than server-side schema, see `groq_provider.py`) → grounding pass.
 
 ### Attribution is diarization + a manual mapping step
 
@@ -215,6 +217,57 @@ diarizer. `SELECTORS.speaking` rotting is therefore no longer a correctness bug 
 but `SELECTORS.tile` and `SELECTORS.name` rotting still is, since the roster (hence
 attendance and the map candidates) is built on them; see the roster bullet above
 for the health warnings that now make that failure loud instead of silent.
+
+**Auto-record nudges; it never records for you.** The content script watches
+`adapter.isInCall()` (for Meet, the "Leave call"/"Hang up" control — present only
+once you are past the green room, so the nudge cannot fire mid-setup) on a debounced
+3s poll and tells the service worker `MEETING_JOINED`/`MEETING_LEFT`. A join turns
+the toolbar icon green *and* raises an in-page panel (`content/record-panel.ts`)
+with a **Start recording** button, so recording can begin without opening the popup;
+but it does **not** start recording on its own, both because
+`chrome.tabCapture.getMediaStreamId` requires a user gesture and because silent
+recording is exactly the consent failure the REC badge exists to prevent. A leave
+*does* auto-stop and finalize — but only a recording the user started on that same
+tab, and only with `autoStopOnLeave` on. The tab being **closed** is the leave the
+content script cannot report (it died with the tab), so `chrome.tabs.onRemoved` in
+the worker is the backstop that finalizes it. Both behaviours are user-toggleable
+(`lib/settings.ts`, `chrome.storage.local`, default on) from the popup. Zoom/Teams
+`isInCall()` returns `false` until those adapters gain a real in-call selector, so
+they get no nudge — the same safe degradation their attribution already makes.
+
+The panel's Start button sends `REQUEST_START_RECORDING`; the worker records
+`sender.tab.id` (the content script cannot know its own). This is the one place a
+recording can begin from a click that is **not** on the toolbar button, and Chrome
+**does** refuse `getMediaStreamId` for exactly that reason — a gesture that did not
+"invoke the extension" (confirmed in a live call, not hypothetical). That refusal is
+caught (`friendlyStartError`) and the panel points at the paths that *do* carry the
+gesture, rather than failing blank.
+
+So the reliable start is a **keyboard shortcut** (`commands.toggle-recording`,
+suggested `Alt+Shift+R`): `commands.onCommand` runs with a user gesture and grants
+activeTab for the focused tab, which is precisely what tab capture needs and what the
+in-page click cannot supply. `onToggleShortcut` toggles — stop if recording, else
+record the active tab — so one binding serves both directions. The panel shows the
+**actually-bound** shortcut (`GET_START_SHORTCUT` → `chrome.commands.getAll()`, not
+the suggested key, which may be unbound or rebound at chrome://extensions/shortcuts):
+as a hint under the Start button, and as the lead remedy on the error card. The only
+other gesture-bearing path remains the toolbar click (the popup's Start button). The panel is
+Shadow-DOM'd so Meet's CSS cannot reach it; it is the content script's own UI and
+owns no state — it renders `joinPrompt`/`starting`/`recording`/`error` on command
+and reports clicks back, while `content/index.ts` (`updatePanel`) holds the state
+machine. Dismissing it suppresses the prompt until the next call, and a manual stop
+is treated as a dismissal so the same call is not re-nagged.
+
+The panel reads its enabled/disabled setting by **asking the worker** (`GET_SETTINGS`),
+not by importing `lib/settings`. This is not a style choice: the content script is a
+**classic script**, so importing any runtime module it shares with another entry
+point makes Rollup hoist that module into `src/chunks/` and emit an `import` at the
+top of `content.js` — which throws "Cannot use import statement outside a module" and
+kills the whole script (panel *and* attribution) at load. It shipped exactly once and
+was caught only in a live meeting's console. The content script may therefore import
+only content-local and type-only modules; `vite.config.ts`'s
+`assertContentSelfContained` now fails the build if `content.js` ever references a
+chunk, turning that silent runtime crash into a loud build one.
 
 ### The eval harness measures the transcript; nothing measures the minutes yet
 

@@ -71,7 +71,7 @@ This page is the argument. [`docs/`](docs/README.md) is the reference:
 | Queue | Postgres `FOR UPDATE SKIP LOCKED` | Transcription takes minutes, so it cannot run in a request. A broker would buy throughput we don't need — the GPU is the bottleneck |
 | Transcription | `faster-whisper` `large-v3`, int8_float16 | The big model earns its keep on exactly the words minutes are made of: names, products, acronyms |
 | Diarization | `pyannote.audio` `speaker-diarization-3.1` | The only attribution source. Anonymous clusters, named once by a human — a scrape of the meeting UI was free and faster, but broke silently on every reskin |
-| Minutes | OpenAI (`gpt-5.6`), structured output + grounding pass | Provider is a one-line switch (`LLM_PROVIDER`); Anthropic is installed and A/B-testable on the eval set |
+| Minutes | Groq (`llama-3.3-70b-versatile`), structured output + grounding pass | Provider is a one-line switch (`LLM_PROVIDER`); Google, OpenAI, and Anthropic are installed and A/B-testable on the eval set |
 | RAG | ChromaDB (phase 2) | Inherits every upstream error, so it goes last |
 
 ## Running it

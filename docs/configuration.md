@@ -101,29 +101,33 @@ sensible with no GPU and no HF token.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `LLM_PROVIDER` | str | `openai` | `openai` or `anthropic` |
+| `LLM_PROVIDER` | str | `groq` | `groq`, `google`, `openai`, or `anthropic` |
+| `GROQ_API_KEY` | str \| None | `None` | Required if provider is `groq` |
+| `GOOGLE_API_KEY` | str \| None | `None` | Required if provider is `google` |
 | `OPENAI_API_KEY` | str \| None | `None` | Required if provider is `openai` |
 | `ANTHROPIC_API_KEY` | str \| None | `None` | Required if provider is `anthropic` |
-| `MINUTES_MODEL` | str | `gpt-5.6` | |
-| `GROUNDING_MODEL` | str | `gpt-5.6` | |
-| `TRANSLATION_MODEL` | str | `gpt-5.6` | |
+| `MINUTES_MODEL` | str | `llama-3.3-70b-versatile` | |
+| `GROUNDING_MODEL` | str | `llama-3.1-8b-instant` | |
+| `TRANSLATION_MODEL` | str | `llama-3.3-70b-versatile` | |
 
-Both SDKs are installed deliberately, and `get_provider()` imports lazily and
+All the SDKs are installed deliberately, and `get_provider()` imports lazily and
 raises a clear error if the selected provider's key is missing. So **A/B-ing a
 provider on the eval set is a config change, not a reinstall**.
 
-Known model ids: OpenAI `gpt-5.6`; Anthropic `claude-opus-4-8`, `claude-sonnet-5`.
-The three model settings are separate because they are separate jobs — grounding is
-a narrow, well-posed question and could reasonably run on a cheaper model than
-extraction.
+Known model ids: Groq `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
+(console.groq.com/docs/models); Google `gemini-2.5-pro`, `gemini-2.5-flash`; OpenAI
+`gpt-5.6`; Anthropic `claude-opus-4-8`, `claude-sonnet-5`. The three model settings
+are separate because they are separate jobs — grounding is a narrow, well-posed
+question and runs on the fast 8B, while extraction and translation get the 70B.
 
-> `TRANSLATION_MODEL` is read by `run_translate` but is **not listed in
-> `.env.example`**, which documents 21 vars and omits this one. It defaults to
-> `gpt-5.6`, so nothing breaks; the example file is just incomplete.
+> Groq is the default because it is free and fast, which is what a metered
+> provider's exhausted quota is not. Its structured output is JSON mode validated
+> with Pydantic, not a server-side schema constraint (see `groq_provider.py`) — an
+> off-schema reply becomes `None`, the same "no answer" the callers fail closed on.
 
-> `ANTHROPIC_API_KEY` is empty in the current `backend/.env`, so the one-line
-> `LLM_PROVIDER=anthropic` switch needs a key added before it works on this
-> machine.
+> The real key goes in `backend/.env` only (gitignored) — never in `.env.example`,
+> which carries placeholders. `LLM_PROVIDER=groq` needs `GROQ_API_KEY` set before
+> minutes can be generated.
 
 ## RAG (phase 2)
 

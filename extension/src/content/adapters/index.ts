@@ -42,6 +42,18 @@ export interface MeetingAdapter {
   /** The meeting's title, if the page exposes one. */
   getTitle(): string | null;
 
+  /**
+   * Whether the user has actually *joined* the call — past any pre-join / green
+   * room screen and into the meeting proper.
+   *
+   * This drives the auto-record nudge, so it must not fire while someone is still
+   * setting up their camera. It is a best-effort read of the meeting UI: an
+   * adapter that cannot tell should return `false`, which simply means no nudge on
+   * that platform and recording stays a manual click — a safe degradation, the
+   * same one an unimplemented adapter already makes for attribution.
+   */
+  isInCall(): boolean;
+
   /** Start watching. Turns are emitted as they *close*, not as they open. */
   observe(onTurn: (turn: ObservedTurn) => void): void;
 

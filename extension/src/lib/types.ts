@@ -65,7 +65,28 @@ export type ExtensionMessage =
   /** The roster as it looks now — sent whenever it grows, not just at the start.
    *  Someone who joins mid-meeting is a real attendee, and the read taken in the
    *  record click's call stack cannot know about them. */
-  | { type: 'PARTICIPANTS'; participants: Participant[] };
+  | { type: 'PARTICIPANTS'; participants: Participant[] }
+  /** The user has joined a call on this tab (crossed from the green room into the
+   *  meeting). The service worker uses it to nudge them to record — never to start
+   *  recording, which stays a deliberate click for consent reasons. */
+  | { type: 'MEETING_JOINED' }
+  /** The user has left the call on this tab. If a recording is running on it, the
+   *  service worker stops and finalizes it; otherwise it just clears the nudge. */
+  | { type: 'MEETING_LEFT' }
+  /** The user clicked "Start recording" in the in-page panel. The service worker
+   *  records the *sender's* tab — this is the popup's START_RECORDING without a
+   *  tabId, since the content script cannot know its own. May fail if Chrome
+   *  refuses tab capture outside a toolbar-click gesture; the reply says so. */
+  | { type: 'REQUEST_START_RECORDING' }
+  /** The content script asking for the current settings. It reads them from the
+   *  worker rather than importing `lib/settings` directly: a content script is
+   *  loaded as a classic script, so pulling in a module shared with another entry
+   *  point makes Rollup emit an `import` it cannot execute. The reply is `Settings`. */
+  | { type: 'GET_SETTINGS' }
+  /** The content script asking which keyboard shortcut is bound to start/stop
+   *  recording, to show it in the panel. The reply is the shortcut string (e.g.
+   *  "Alt+Shift+R"), or '' when nothing is bound. */
+  | { type: 'GET_START_SHORTCUT' };
 
 export interface RecordingState {
   isRecording: boolean;
@@ -231,4 +252,19 @@ export interface Minutes {
   summary: string | null;
   version: number;
   items: MinutesItem[];
+}
+
+/**
+ * User-controllable behaviour for the auto-record helpers.
+ *
+ * Both default on, and both are deliberately conservative about consent:
+ * `autoPromptOnJoin` only *nudges* (it never starts a recording on its own — that
+ * stays an explicit click), and `autoStopOnLeave` only ever ends a recording the
+ * user themselves started. Stored in `chrome.storage.local`; see `lib/settings`.
+ */
+export interface Settings {
+  /** Light the toolbar icon when a call is detected, inviting a one-click record. */
+  autoPromptOnJoin: boolean;
+  /** Stop and finalize automatically when the recorded meeting ends or its tab closes. */
+  autoStopOnLeave: boolean;
 }

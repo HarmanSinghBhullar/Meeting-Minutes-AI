@@ -106,6 +106,18 @@ const SELECTORS = {
   ],
 
   /**
+   * Controls that exist only once the user has *joined* the call, never on the
+   * green room / pre-join screen (which offers "Join now" instead). `isInCall`
+   * keys the auto-record nudge off these so it cannot fire while someone is still
+   * setting up their camera.
+   *
+   * Semantic aria-labels, chosen for the same durability reason as the rest of
+   * this object. If Meet renames them the nudge quietly stops firing and recording
+   * stays a manual click — a safe degradation, not a wrong recording.
+   */
+  inCall: ['[aria-label*="leave call" i]', '[aria-label*="hang up" i]'],
+
+  /**
    * Signals that a participant is *presenting* (sharing their screen), tried in
    * order. This is the second attribution path, and a very different one: the
    * active-speaker indicator above only fires for a participant's **microphone**,
@@ -269,6 +281,14 @@ export class MeetAdapter implements MeetingAdapter {
     // ("Meet – abc-defg-hij") is the best we have. Thin, but it still helps prime
     // Whisper, and the backend can accept a better title from elsewhere later.
     return document.title || null;
+  }
+
+  isInCall(): boolean {
+    // The presence of an in-call control ("Leave call" / "Hang up") is the signal
+    // that we are past the green room. Deliberately no tile fallback: the pre-join
+    // screen can render a self-preview tile, and treating that as "in a call" would
+    // nudge the user to record while they are still choosing a camera.
+    return SELECTORS.inCall.some((selector) => document.querySelector(selector) !== null);
   }
 
   observe(onTurn: (turn: ObservedTurn) => void): void {

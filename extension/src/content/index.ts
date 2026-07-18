@@ -20,10 +20,12 @@ import type {
   MeetingContext,
   Participant,
   Platform,
+  Settings,
   SpeakerEvent,
   StoppedResult,
 } from '@/lib/types';
 import { getAdapter, type ObservedTurn } from './adapters';
+import { RecordPanel } from './record-panel';
 
 /** How often buffered turns are flushed to the service worker. */
 const FLUSH_INTERVAL_MS = 10_000;
@@ -45,6 +47,22 @@ const FLUSH_INTERVAL_MS = 10_000;
 const ROSTER_INTERVAL_MS = 5_000;
 
 /**
+ * How often we check whether the user is in a call, for the auto-record nudge and
+ * auto-stop. Coarser than the roster poll — joining and leaving are human-scale
+ * events, and a couple of seconds' latency on either is imperceptible.
+ */
+const CALL_DETECT_INTERVAL_MS = 3_000;
+
+/**
+ * Consecutive same-reading ticks required before we believe a call has started or
+ * ended. Meet's UI flickers during layout changes and reconnects, and a single
+ * stray reading either way would fire a spurious nudge or, worse, auto-stop a live
+ * recording. Two ticks (~6s) is well inside human join/leave time and immune to a
+ * one-frame blip.
+ */
+const CALL_DETECT_CONFIRMATIONS = 2;
+
+/**
  * A human-readable stamp logged the moment this script loads. Reloading the
  * extension does *not* replace the content script already running in an open
  * meeting tab — only a real tab refresh does — so during development it is easy
@@ -52,7 +70,7 @@ const ROSTER_INTERVAL_MS = 5_000;
  * is this tab running?" answerable at a glance: bump it whenever the adapter
  * changes, refresh the tab, and confirm the new stamp appears.
  */
-const BUILD = 'meet-adapter 2026-07-18b (name=span.notranslate, speaking=.sxlEM, +self-detect, +presenter, +roster-poll, +tile-health)';
+const BUILD = 'meet-adapter 2026-07-18e (name=span.notranslate, speaking=.sxlEM, +self-detect, +presenter, +roster-poll, +tile-health, +auto-record, +record-panel, +shortcut)';
 
 const platform = detectPlatform();
 const adapter = getAdapter(platform);
@@ -77,6 +95,25 @@ let totalEvents = 0;
  * that came back empty at click time is refilled by the first tick.
  */
 let sentParticipants = new Set<string>();
+
+/**
+ * Debounced view of whether the user is in a call, for the auto-record nudge and
+ * auto-stop. `callConfirm` counts consecutive ticks that disagree with `inCall`,
+ * and the flip only happens once it reaches `CALL_DETECT_CONFIRMATIONS` — see the
+ * constant for why a single reading is not trusted.
+ */
+let inCall = false;
+let callConfirm = 0;
+
+/** The in-page record panel, and whether the user waved it away this call. */
+const panel = new RecordPanel();
+/** The bound start/stop shortcut (e.g. "Alt+Shift+R"), cached after first fetch.
+ *  '' means unbound; `null` means not yet asked. Shown in the panel as the reliable
+ *  start path — the one Chrome accepts when the in-page button is refused. */
+let recordShortcut: string | null = null;
+/** Dismissing the join prompt suppresses it until the next call — not forever, or
+ *  the feature would silently disable itself after one idle click. Reset on leave. */
+let promptDismissed = false;
 
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, _sender, sendResponse: (response?: unknown) => void) => {
@@ -128,6 +165,10 @@ function start(startedAt: number): void {
 
   flushTimer = window.setInterval(flush, FLUSH_INTERVAL_MS);
   rosterTimer = window.setInterval(flushRoster, ROSTER_INTERVAL_MS);
+
+  // Recording began (from the popup, or from the panel's own button) — the panel
+  // now offers Stop instead of Start.
+  void updatePanel();
 }
 
 /**
@@ -168,6 +209,13 @@ function stop(): StoppedResult {
   const remaining = pending;
   pending = [];
   recordingStartedAt = null;
+
+  // Recording is over. Fold the panel away rather than re-offering Start — someone
+  // who just stopped is not looking to immediately record the same call again.
+  // Treating it as a dismissal means the prompt stays gone until they leave and
+  // rejoin (where `detectCallTick` clears the flag).
+  promptDismissed = true;
+  void updatePanel();
 
   // One last read on the way out. Someone who joined in the closing seconds is as
   // real an attendee as anyone, and this is the only chance left to notice them:
@@ -265,10 +313,147 @@ function flushRoster(): void {
     });
 }
 
+/**
+ * Watch for the user joining or leaving the call, and tell the service worker.
+ *
+ * This runs from the moment the script loads and for the whole life of the tab —
+ * independent of recording — because the join is what we want to react to, and it
+ * usually happens *before* anyone thinks to record. The two signals it sends do
+ * very different things (see the message docs): a join is a gentle nudge, a leave
+ * can stop an in-progress recording. Neither ever *starts* one.
+ *
+ * The reading is debounced through `CALL_DETECT_CONFIRMATIONS` so a one-frame UI
+ * blip cannot fire a spurious nudge or, far worse, auto-stop a live recording.
+ */
+function detectCallTick(): void {
+  if (!adapter) return;
+
+  const reading = adapter.isInCall();
+  if (reading === inCall) {
+    callConfirm = 0; // steady state; nothing pending
+    return;
+  }
+
+  callConfirm += 1;
+  if (callConfirm < CALL_DETECT_CONFIRMATIONS) return;
+
+  inCall = reading;
+  callConfirm = 0;
+
+  // A fresh call gets a fresh prompt: someone who dismissed the panel in the last
+  // meeting should still be offered the next one.
+  if (!inCall) promptDismissed = false;
+
+  // The worker may be evicted; sending wakes it. A failure here (extension
+  // reloading, worker torn down mid-send) is swallowed: the next real transition
+  // re-syncs, and for a leave-while-recording the worker's own tab-close listener
+  // is the backstop.
+  void chrome.runtime
+    .sendMessage({ type: inCall ? 'MEETING_JOINED' : 'MEETING_LEFT' } satisfies ExtensionMessage)
+    .catch(() => undefined);
+
+  void updatePanel();
+}
+
+/**
+ * Show the right panel for the current state, or nothing.
+ *
+ * The single place that decides what the in-page card displays, so the state
+ * machine lives in one function instead of being smeared across every event:
+ *
+ *   - recording        → the Stop card (regardless of call detection, since that
+ *                        is the state the user most needs to be able to end);
+ *   - in a call, not yet dismissed, nudge enabled → the Start card;
+ *   - anything else     → hidden.
+ */
+async function updatePanel(): Promise<void> {
+  if (recordingStartedAt !== null) {
+    panel.recording(requestStop);
+    return;
+  }
+
+  if (!inCall || promptDismissed) {
+    panel.hide();
+    return;
+  }
+
+  // Settings come from the worker, not a direct import — see `GET_SETTINGS`. An
+  // unanswered query (worker mid-restart) defaults to showing the prompt: the
+  // shipped default is on, and a missed read should not silently disable a feature
+  // the user did not turn off.
+  const settings = (await chrome.runtime
+    .sendMessage({ type: 'GET_SETTINGS' } satisfies ExtensionMessage)
+    .catch(() => null)) as Settings | null;
+
+  if (settings?.autoPromptOnJoin === false) {
+    panel.hide();
+    return;
+  }
+
+  panel.joinPrompt(requestStart, dismissPrompt, await getRecordShortcut());
+}
+
+/** The bound start/stop shortcut, asked of the worker once and then cached. Falls
+ *  back to '' (no hint shown) if the worker cannot be reached. */
+async function getRecordShortcut(): Promise<string> {
+  if (recordShortcut !== null) return recordShortcut;
+
+  const shortcut = (await chrome.runtime
+    .sendMessage({ type: 'GET_START_SHORTCUT' } satisfies ExtensionMessage)
+    .catch(() => '')) as string;
+
+  recordShortcut = shortcut ?? '';
+  return recordShortcut;
+}
+
+/** Ask the service worker to record this tab. It replies ok/why-not; on failure
+ *  the panel explains and offers a retry (see `RecordPanel.error`). */
+function requestStart(): void {
+  panel.starting();
+  void chrome.runtime
+    .sendMessage({ type: 'REQUEST_START_RECORDING' } satisfies ExtensionMessage)
+    .then(async (res: { ok: boolean; error?: string } | undefined) => {
+      // Success arrives as a RECORDING_STARTED message, which repaints the panel
+      // via `start()`. Only the failure has to be handled here — and it is the
+      // common one, since Chrome refuses tab capture from this in-page click.
+      if (!res?.ok) {
+        panel.error(
+          res?.error ?? 'Recording could not be started.',
+          requestStart,
+          dismissPrompt,
+          await getRecordShortcut(),
+        );
+      }
+    })
+    .catch(async (err: unknown) => {
+      panel.error(String(err), requestStart, dismissPrompt, await getRecordShortcut());
+    });
+}
+
+/** Stop from the panel. The worker finalizes and messages RECORDING_STOPPED back,
+ *  which hides the panel via `stop()`. */
+function requestStop(): void {
+  void chrome.runtime
+    .sendMessage({ type: 'STOP_RECORDING' } satisfies ExtensionMessage)
+    .catch(() => undefined);
+}
+
+function dismissPrompt(): void {
+  promptDismissed = true;
+  panel.hide();
+}
+
 function detectPlatform(): Platform {
   const host = window.location.hostname;
   if (host.includes('meet.google.com')) return 'meet';
   if (host.includes('zoom.us')) return 'zoom';
   if (host.includes('teams.')) return 'teams';
   return 'other';
+}
+
+// Only platforms with a real adapter can report call state; on an unsupported page
+// `getAdapter` returns null and there is nothing to watch.
+if (adapter) {
+  window.setInterval(detectCallTick, CALL_DETECT_INTERVAL_MS);
+  detectCallTick(); // don't wait a full interval to notice an already-joined call
 }

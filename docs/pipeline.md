@@ -456,9 +456,13 @@ def complete(*, system: str, prompt: str, schema: type[ModelT],
 The schema is enforced **server-side** by the provider, not parsed hopefully out of
 prose. Callers must treat `None` as "no answer" — never as "approved".
 
-`get_provider()` reads `LLM_PROVIDER` and imports the SDK **lazily**, so an install
-using one provider does not need the other's package. Switching is a config change,
-not a code change.
+`get_provider()` reads `LLM_PROVIDER` (`groq`, `google`, `openai`, or `anthropic`;
+default `groq`) and imports that provider's SDK **lazily**, so an install using one
+provider does not need the others' packages. Switching is a config change, not a
+code change. (Groq alone enforces the schema client-side — JSON mode + Pydantic
+validation — because it has no cross-model server-side schema mode; the interface's
+"no malformed output reaches a caller" guarantee still holds via a `None` on a bad
+shape.)
 
 That seam is only worth having because everything that makes the output
 trustworthy — required `cites`, the roster check, grounding's isolation, chunking,
