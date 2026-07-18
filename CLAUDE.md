@@ -107,6 +107,25 @@ So `pyannote/speaker-diarization-3.1` now attributes every tab track
   `POST /recordings/meetings/{id}/participants`, which is **additive only**: it
   never renames, never deletes, and never touches a row a human ruled on at the
   mapping panel, because the roster arrives on a timer and an answer does not.
+- **The roster's *timing* is robust; its *selectors* still rot, and now say so.**
+  The poll fixed the empty-at-click-time race, but capture still depends on reading
+  Meet's obfuscated DOM, and on 2026-07-18 it broke silently: Meet moved the
+  participant name out of `data-self-name`/`data-participant-name` into a plain
+  `span.notranslate`, so every `SELECTORS.name` hook missed and two real Meet calls
+  recorded *nobody* — voices with no attendance and no map candidates, exactly the
+  old failure wearing new clothes. The name now reads from `span.notranslate`
+  (`.notranslate` is Google's translate-exclusion marker, not an obfuscated class,
+  so it outlives reskins), filtered by `asName` against Material icon ligatures
+  (`more_vert`, `devices`) that share that class — a ligature is lowercase
+  snake_case, a name has a capital or a space. `data-self-name` went with it, so
+  **self** is now the `(You)` marker resolved by participant-id (it often sits on
+  the People-panel entry, not the grid tile) with a self-only-control fallback
+  (`Reframe`/`Backgrounds and effects`) for when the panel is closed. The blind
+  spot that let this hide: `MeetAdapter.checkHealth` treated zero tiles as "UI not
+  loaded yet" and never warned. It now tracks `sawAnyTile` and, past the grace
+  window, distinguishes **no tile at all** (`SELECTORS.tile` rotted — roster dead)
+  from **tiles but no speech** (`SELECTORS.speaking` rotted — eval data only), and
+  the content script warns at stop when it captured no roster all meeting.
 - **Only rows that stand for a real person feed Whisper and pyannote**
   (`_real_people` in `workers/pipeline.py`), which is subtler than it sounds
   because both inputs are read *before* the same job clears the last run's rows.
@@ -187,11 +206,15 @@ lines (text *or* speaker name), opens the survivors, marks the hits, and reports
 `3 of 11` per group — the header counts lines rather than "matches", since one
 line can highlight twice.
 
-The Meet adapter still identifies the local user (via `data-self-name` or Meet's
-"(You)" marker) so their track is named rather than an invented "You". It also
-still records active-speaker and presenter events to `SpeakerEvent`; these no
-longer drive attribution and are kept only as evaluation data against the
-diarizer. `SELECTORS.speaking` rotting is therefore no longer a correctness bug.
+The Meet adapter still identifies the local user (by Meet's "(You)" marker, or a
+self-only tile control when the People panel is closed — `data-self-name` was
+dropped in the 2026-07-18 reskin) so their track is named rather than an invented
+"You". It also still records active-speaker and presenter events to `SpeakerEvent`;
+these no longer drive attribution and are kept only as evaluation data against the
+diarizer. `SELECTORS.speaking` rotting is therefore no longer a correctness bug —
+but `SELECTORS.tile` and `SELECTORS.name` rotting still is, since the roster (hence
+attendance and the map candidates) is built on them; see the roster bullet above
+for the health warnings that now make that failure loud instead of silent.
 
 ### The eval harness measures the transcript; nothing measures the minutes yet
 

@@ -52,7 +52,7 @@ const ROSTER_INTERVAL_MS = 5_000;
  * is this tab running?" answerable at a glance: bump it whenever the adapter
  * changes, refresh the tab, and confirm the new stamp appears.
  */
-const BUILD = 'meet-adapter 2026-07-17b (speaking=.sxlEM, +self-detect, +presenter, +roster-poll)';
+const BUILD = 'meet-adapter 2026-07-18b (name=span.notranslate, speaking=.sxlEM, +self-detect, +presenter, +roster-poll, +tile-health)';
 
 const platform = detectPlatform();
 const adapter = getAdapter(platform);
@@ -172,7 +172,24 @@ function stop(): StoppedResult {
   // One last read on the way out. Someone who joined in the closing seconds is as
   // real an attendee as anyone, and this is the only chance left to notice them:
   // the service worker finalizes immediately after this returns.
-  return { events: remaining, participants: takeNewParticipants() };
+  const participants = takeNewParticipants();
+
+  // Not one roster member captured all meeting — not here, and not on any 5s
+  // tick. That is the "no attendance recorded" failure at its source: the meeting
+  // will have no attendees and its diarized voices no name candidates. On a real
+  // call it means the roster read itself is broken, so say so now rather than let
+  // it surface days later as minutes with no owners. (`totalEvents === 0` above is
+  // the sibling signal for the speaking timeline; this one is for the roster.)
+  if (sentParticipants.size === 0) {
+    console.warn(
+      '[content] no roster captured on %s for the whole meeting — attendance will ' +
+        'be empty and diarized voices will have no name candidates. If this is Meet, ' +
+        'the participant-tile selector has likely rotted; see the [meet] warning above.',
+      platform,
+    );
+  }
+
+  return { events: remaining, participants };
 }
 
 /** Convert a wall-clock turn onto the recording's clock. */

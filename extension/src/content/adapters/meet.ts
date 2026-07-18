@@ -50,16 +50,33 @@ const SELECTORS = {
    */
   tile: '[data-participant-id]',
 
-  /** The local user. Meet stamps their own name into this attribute. */
+  /**
+   * The local user. Meet used to stamp their name into `data-self-name`; as of
+   * 2026-07 that attribute is gone, so this is kept only for older builds — self
+   * is now found by the "(You)" marker and `selfControl` below (see `isSelfTile`).
+   */
   selfName: '[data-self-name]',
 
   /**
-   * The participant's name within a tile, in preference order. Meet has moved
-   * the name between these over time, so we take the first that yields text.
-   * `aria-label` is the last resort — durable, but noisier (it can carry status
-   * text like "Priya, muted"), so `nameOf` trims it.
+   * Self-only tile controls. You can reframe or restyle *your own* video and no
+   * one else's, so a tile carrying one of these is the local user. This is the
+   * fallback that still finds self when Meet's "(You)" marker lives only in the
+   * People panel and the panel is closed — i.e. during a normal recording.
    */
-  name: ['[data-self-name]', '[data-participant-name]', '[jsname="rBUW7d"]'],
+  selfControl: ['[aria-label*="backgrounds and effects" i]', '[aria-label*="reframe" i]'],
+
+  /**
+   * The participant's name within a tile, in preference order — the first match
+   * whose text is name-shaped wins (see `asName`, which rejects Material icon
+   * ligatures like "more_vert"/"devices" that also carry `.notranslate`).
+   *
+   * `data-self-name`/`data-participant-name` are Meet's older hooks, kept for
+   * builds that still expose them. As of 2026-07 both are gone and the visible
+   * name is a plain `span.notranslate` inside the tile: `.notranslate` is
+   * Google's translate-exclusion marker, not an obfuscated build class, so it
+   * outlives reskins where the old `[jsname="rBUW7d"]` hook (now rotted) did not.
+   */
+  name: ['[data-self-name]', '[data-participant-name]', 'span.notranslate'],
 
   /**
    * Candidate signals for "this tile is currently speaking", tried in order.
@@ -189,6 +206,9 @@ export class MeetAdapter implements MeetingAdapter {
   // --- Attribution health. These exist so a silent selector failure becomes a
   // loud, actionable warning instead of a transcript full of "Unknown". ---
   private observeStartedAt = 0;
+  /** Whether `SELECTORS.tile` has ever matched — the roster and speaking
+   *  detection both stand on it, so it never matching is the silent failure. */
+  private sawAnyTile = false;
   private sawAnySpeaker = false;
   private turnsEmitted = 0;
   private healthWarned = false;
@@ -196,18 +216,26 @@ export class MeetAdapter implements MeetingAdapter {
   getParticipants(): Participant[] {
     const participants: Participant[] = [];
 
+    // Which participant ids are the local user, gathered once across the page.
+    // Meet's "(You)" marker often sits on the People-panel entry for a person
+    // rather than their grid tile, but the two share one `data-participant-id` —
+    // so resolving self by id catches the marker wherever it landed.
+    const selfIds = this.selfParticipantIds();
+
     for (const tile of this.tiles()) {
       const raw = this.nameOf(tile);
       if (!raw) continue;
 
-      // Decide self *before* stripping, since the "(You)" marker is the signal;
-      // then show the person by their real name, not "Priya Sharma (You)".
-      const isLocalUser = this.isSelfTile(tile, raw);
       const name = this.displayName(raw);
       if (!name) continue;
       if (participants.some((p) => p.displayName === name)) continue;
 
       const externalRef = tile.getAttribute('data-participant-id');
+      // Self by id first (the marker may have been on the panel entry, not here),
+      // then the per-tile signals — "(You)" on this tile, or a self-only control.
+      const isLocalUser =
+        (externalRef !== null && selfIds.has(externalRef)) || this.isSelfTile(tile, raw);
+
       participants.push({
         displayName: name,
         ...(externalRef ? { externalRef } : {}),
@@ -216,6 +244,24 @@ export class MeetAdapter implements MeetingAdapter {
     }
 
     return participants;
+  }
+
+  /**
+   * The `data-participant-id`s that belong to the local user.
+   *
+   * The one durable "this is me" signal Meet still exposes is the localized
+   * "(You)" it appends to the local participant — but it can render on the grid
+   * tile or the People-panel entry, two elements sharing a single id. So scan
+   * every participant element for the marker and collect ids; any tile with a
+   * matching id is then self, wherever the marker itself happened to be.
+   */
+  private selfParticipantIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const el of this.tiles()) {
+      const id = el.getAttribute('data-participant-id');
+      if (id && SELF_MARKER.test(el.textContent ?? '')) ids.add(id);
+    }
+    return ids;
   }
 
   getTitle(): string | null {
@@ -228,6 +274,7 @@ export class MeetAdapter implements MeetingAdapter {
   observe(onTurn: (turn: ObservedTurn) => void): void {
     this.onTurn = onTurn;
     this.observeStartedAt = Date.now();
+    this.sawAnyTile = false;
     this.sawAnySpeaker = false;
     this.turnsEmitted = 0;
     this.healthWarned = false;
@@ -257,11 +304,23 @@ export class MeetAdapter implements MeetingAdapter {
     // "Unknown" — worth flagging at the source rather than discovering it later
     // in the minutes.
     if (this.turnsEmitted === 0) {
-      console.warn(
-        '[meet] recording ended with 0 speaker turns — remote speakers will be ' +
-          '"Unknown". SELECTORS.speaking likely no longer matches Meet; run ' +
-          '__meetCalibrate() on a live call to find the current signal.',
-      );
+      if (!this.sawAnyTile) {
+        // Never saw a tile at all, so this is not the speaking selector — it is
+        // the tile hook underneath both it and the roster. Point at the right fix.
+        console.warn(
+          '[meet] recording ended having seen 0 participant tiles (%s) — the roster ' +
+            'was empty (no attendance, no name candidates) and every remote speaker ' +
+            'will be "Unknown". SELECTORS.tile no longer matches Meet; fix it in ' +
+            'adapters/meet.ts against a live call.',
+          SELECTORS.tile,
+        );
+      } else {
+        console.warn(
+          '[meet] recording ended with 0 speaker turns — remote speakers will be ' +
+            '"Unknown". SELECTORS.speaking likely no longer matches Meet; run ' +
+            '__meetCalibrate() on a live call to find the current signal.',
+        );
+      }
     } else {
       console.info('[meet] speaker timeline: %d turns emitted.', this.turnsEmitted);
     }
@@ -270,9 +329,15 @@ export class MeetAdapter implements MeetingAdapter {
   /** One sampling tick: who is speaking, and what does that do to open turns? */
   private sample(): void {
     const now = Date.now();
+    const tiles = this.tiles();
+    // The one selector with no fallback and no other guard: when it rots, the
+    // roster and speaking detection go silent together. Remember we saw at least
+    // one tile, so `checkHealth` can tell "Meet renamed the tile hook" apart from
+    // "this speaker's mic signal stopped matching".
+    if (tiles.length > 0) this.sawAnyTile = true;
     const speakingNow = new Set<string>();
 
-    for (const tile of this.tiles()) {
+    for (const tile of tiles) {
       if (!this.isSpeaking(tile)) continue;
 
       const id = tile.getAttribute('data-participant-id');
@@ -343,18 +408,43 @@ export class MeetAdapter implements MeetingAdapter {
   }
 
   /**
-   * Warn once if the meeting clearly has people in it but no speaking signal has
-   * ever matched. This is the difference between "the room was silent" (fine) and
-   * "our selectors are stale" (the transcript will be full of Unknown) — and only
-   * the second is worth shouting about, so we require both a grace period and
-   * visible participants before we do.
+   * Warn once, past a grace period, when attribution has clearly broken rather
+   * than the room simply being quiet. Two distinct failures land here and need
+   * different fixes, so this names them apart:
+   *
+   *   - **No tile ever seen.** `SELECTORS.tile` is the single hook the roster and
+   *     speaking detection both stand on, and it has no fallback. When it rots the
+   *     failure is otherwise completely silent — an empty roster (no attendance,
+   *     no name candidates), no speaker events, and a quiet fall back to
+   *     diarization with nobody named. This is the case that shipped a real
+   *     meeting with no attendees. The grace period already covers "the grid has
+   *     not rendered yet", so zero tiles *after* it is rot, not slowness — the old
+   *     `tileCount === 0 → return` read it as the latter and so never warned.
+   *   - **Tiles but no speaking signal.** The tile hook is fine; `SELECTORS.speaking`
+   *     is what stopped matching.
+   *
+   * A genuinely silent meeting trips neither: it has tiles and simply no speech,
+   * which is why the second branch requires a tile to prove the UI is present.
    */
   private checkHealth(now: number): void {
     if (this.healthWarned || this.sawAnySpeaker) return;
     if (now - this.observeStartedAt < ATTRIBUTION_HEALTH_GRACE_MS) return;
 
-    const tileCount = this.tiles().length;
-    if (tileCount === 0) return; // no meeting UI yet — nothing to conclude
+    if (!this.sawAnyTile) {
+      // Not one participant tile in the whole window. This is the roster failure
+      // as seen from the tab: `SELECTORS.tile` no longer matches Meet's markup.
+      this.healthWarned = true;
+      console.warn(
+        '[meet] no participant tile (%s) seen in %ds of recording — Meet has ' +
+          'almost certainly renamed the tile hook. The roster is empty (no ' +
+          'attendance, no name candidates) and every remote speaker will be ' +
+          '"Unknown". Fix: find the current tile attribute on a live call and ' +
+          'update SELECTORS.tile in adapters/meet.ts.',
+        SELECTORS.tile,
+        ATTRIBUTION_HEALTH_GRACE_MS / 1000,
+      );
+      return;
+    }
 
     this.healthWarned = true;
     console.warn(
@@ -363,7 +453,7 @@ export class MeetAdapter implements MeetingAdapter {
         'speaker will come out as "Unknown". Fix: run __meetCalibrate() in this ' +
         'console, have one person talk, and paste the reported selector into ' +
         'SELECTORS.speaking in adapters/meet.ts.',
-      tileCount,
+      this.tiles().length,
       ATTRIBUTION_HEALTH_GRACE_MS / 1000,
     );
   }
@@ -454,31 +544,45 @@ export class MeetAdapter implements MeetingAdapter {
 
   private nameOf(tile: HTMLElement): string | null {
     for (const selector of SELECTORS.name) {
-      const node = tile.matches(selector) ? tile : tile.querySelector(selector);
-      if (!node) continue;
+      // querySelectorAll, not querySelector: the first `span.notranslate` in a
+      // tile is often a Material icon ligature ("more_vert", "devices") that
+      // `asName` rejects, and the real name is a later match.
+      const nodes = tile.matches(selector)
+        ? [tile]
+        : [...tile.querySelectorAll<HTMLElement>(selector)];
 
-      const text =
-        node.getAttribute('data-self-name') ??
-        node.getAttribute('data-participant-name') ??
-        node.textContent;
+      for (const node of nodes) {
+        const text =
+          node.getAttribute('data-self-name') ??
+          node.getAttribute('data-participant-name') ??
+          node.textContent;
 
-      const name = text?.trim();
-      if (name) return name;
+        const name = this.asName(text);
+        if (name) return name;
+      }
     }
 
-    // Last resort: the tile's own accessible label. It is durable but can carry
-    // trailing status ("Priya Sharma, muted" / "Priya Sharma is presenting"), so
-    // we keep only the leading name-shaped part.
-    return this.cleanLabel(tile.getAttribute('aria-label'));
+    // No aria-label fallback any more: as of 2026-07 the tile carries no
+    // name-bearing aria-label (it is null), and the labels it *does* carry sit on
+    // descendant buttons ("You can't unmute someone else") — exactly the noise
+    // that becomes a phantom attendee. Better to skip a tile than invent a person.
+    return null;
   }
 
-  /** Strip status noise from an aria-label so it is usable as a display name. */
-  private cleanLabel(label: string | null): string | null {
-    if (!label) return null;
-    // Names do not contain commas; everything Meet appends (mute/presenting/pin
-    // state) sits after one. Fall back to the whole string if there is no comma.
-    const name = label.split(',')[0]?.trim();
-    return name && !/\b(muted|presenting|pinned|unmute)\b/i.test(name) ? name : null;
+  /**
+   * A tile string as a usable display name, or null if it is not one.
+   *
+   * Meet renders Material icons as their ligature text ("more_vert", "devices",
+   * "frame_person") inside a `span.notranslate` — the same container the name
+   * uses — so extraction has to tell them apart. A ligature is always lowercase
+   * snake_case; a display name carries an uppercase letter or a space. That
+   * difference separates the two without a hardcoded icon list that would rot.
+   */
+  private asName(raw: string | null): string | null {
+    const text = raw?.trim();
+    if (!text) return null;
+    if (/^[a-z0-9_]+$/.test(text)) return null;
+    return text;
   }
 
   private getSelfName(): string | null {
@@ -508,7 +612,15 @@ export class MeetAdapter implements MeetingAdapter {
     // the tile's whole label/text rather than just the name we extracted.
     if (SELF_MARKER.test(rawName)) return true;
     const label = `${tile.getAttribute('aria-label') ?? ''} ${tile.textContent ?? ''}`;
-    return SELF_MARKER.test(label);
+    if (SELF_MARKER.test(label)) return true;
+
+    // No "(You)" on this tile — Meet frequently shows it only in the People
+    // panel, which is closed during a normal recording. Fall back to a self-only
+    // control: you can reframe or restyle your own video and nobody else's, so
+    // its presence on a tile marks the local user.
+    return SELECTORS.selfControl.some(
+      (selector) => tile.matches(selector) || tile.querySelector(selector) !== null,
+    );
   }
 
   /** A tile name as we want to store it: without Meet's trailing "(You)". */
