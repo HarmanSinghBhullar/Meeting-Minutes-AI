@@ -250,6 +250,52 @@ export async function getMinutes(meetingId: string): Promise<Minutes | null> {
   };
 }
 
+export interface AnswerCitation {
+  meetingId: string;
+  meetingTitle: string | null;
+  speaker: string | null;
+  startMs: number;
+  text: string;
+}
+
+export interface MeetingAnswer {
+  answer: string;
+  citations: AnswerCitation[];
+}
+
+/** Ask about one meeting. The server filters retrieval before the LLM sees it. */
+export async function askMeetingQuestion(
+  meetingId: string,
+  question: string,
+): Promise<MeetingAnswer> {
+  const res = await fetch(`${BASE_URL}/qa`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, meeting_id: meetingId }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, 'answer question'));
+  const raw = (await res.json()) as {
+    answer: string;
+    citations: {
+      meeting_id: string;
+      meeting_title: string | null;
+      speaker: string | null;
+      start_ms: number;
+      text: string;
+    }[];
+  };
+  return {
+    answer: raw.answer,
+    citations: raw.citations.map((citation) => ({
+      meetingId: citation.meeting_id,
+      meetingTitle: citation.meeting_title,
+      speaker: citation.speaker,
+      startMs: citation.start_ms,
+      text: citation.text,
+    })),
+  };
+}
+
 /* --- Wire types and mapping --- */
 
 interface RawSpeaker {

@@ -81,12 +81,12 @@ class Settings(BaseSettings):
     #: The extractor decides what counts as a commitment, which is the harder
     #: judgement (so it gets the 70B model); the grounding pass answers a narrow
     #: yes/no question about lines it can see, so it can run on the fast 8B one.
-    minutes_model: str = Field(default="llama-3.3-70b-versatile", alias="MINUTES_MODEL")
-    grounding_model: str = Field(default="llama-3.1-8b-instant", alias="GROUNDING_MODEL")
+    minutes_model: str = Field(default="openai/gpt-oss-120b", alias="MINUTES_MODEL")
+    grounding_model: str = Field(default="openai/gpt-oss-20b", alias="GROUNDING_MODEL")
     #: Translation is line-wise transduction, but quality still matters for names
     #: and code-switching, so it keeps the larger model rather than the 8B.
     translation_model: str = Field(
-        default="llama-3.3-70b-versatile", alias="TRANSLATION_MODEL"
+        default="openai/gpt-oss-120b", alias="TRANSLATION_MODEL"
     )
 
     # --- RAG ---

@@ -106,15 +106,15 @@ sensible with no GPU and no HF token.
 | `GOOGLE_API_KEY` | str \| None | `None` | Required if provider is `google` |
 | `OPENAI_API_KEY` | str \| None | `None` | Required if provider is `openai` |
 | `ANTHROPIC_API_KEY` | str \| None | `None` | Required if provider is `anthropic` |
-| `MINUTES_MODEL` | str | `llama-3.3-70b-versatile` | |
-| `GROUNDING_MODEL` | str | `llama-3.1-8b-instant` | |
-| `TRANSLATION_MODEL` | str | `llama-3.3-70b-versatile` | |
+| `MINUTES_MODEL` | str | `openai/gpt-oss-120b` | |
+| `GROUNDING_MODEL` | str | `openai/gpt-oss-20b` | |
+| `TRANSLATION_MODEL` | str | `openai/gpt-oss-120b` | |
 
 All the SDKs are installed deliberately, and `get_provider()` imports lazily and
 raises a clear error if the selected provider's key is missing. So **A/B-ing a
 provider on the eval set is a config change, not a reinstall**.
 
-Known model ids: Groq `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`
+Known model ids: Groq `openai/gpt-oss-120b`, `openai/gpt-oss-20b`
 (console.groq.com/docs/models); Google `gemini-2.5-pro`, `gemini-2.5-flash`; OpenAI
 `gpt-5.6`; Anthropic `claude-opus-4-8`, `claude-sonnet-5`. The three model settings
 are separate because they are separate jobs — grounding is a narrow, well-posed
@@ -129,16 +129,17 @@ question and runs on the fast 8B, while extraction and translation get the 70B.
 > which carries placeholders. `LLM_PROVIDER=groq` needs `GROQ_API_KEY` set before
 > minutes can be generated.
 
-## RAG (phase 2)
+## RAG
 
 | Variable | Type | Default |
 |---|---|---|
 | `CHROMA_DIR` | Path | `./chroma` |
 | `EMBEDDING_MODEL` | str | `sentence-transformers/all-MiniLM-L6-v2` |
 
-Reserved. Nothing reads them yet — `services/rag/` is stubbed and
-`POST /api/v1/qa` returns 501. See
-[Architecture](architecture.md#deliberately-not-built).
+Install the optional dependencies with `pip install -e ".[rag]"`. The worker
+persists the derived Chroma index under `CHROMA_DIR` after grounding each
+meeting. Deleting a meeting removes its derived windows; `reindex_all` in
+`services/rag/indexer.py` rebuilds the whole store from PostgreSQL.
 
 ## Which process needs what
 

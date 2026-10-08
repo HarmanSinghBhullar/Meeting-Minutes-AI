@@ -200,7 +200,7 @@ backend/
       alignment.py     words + turns -> attributed segments
       translation.py   non-English -> Segment.text_en
       minutes/         extractor, grounding, provider-agnostic structured LLM
-      rag/             phase 2, stubbed
+      rag/             Chroma indexing and grounded Q&A
     workers/           the queue, the pipeline stages, the worker loop
   alembic/             migrations
   scripts/             smoke tests and an adversarial grounding check
@@ -217,13 +217,16 @@ eval/                  the gold set and its metrics
 docs/                  you are here
 ```
 
-## Deliberately not built
+## RAG
 
-**RAG.** [`services/rag/`](../backend/app/services/rag/) is stubbed
-(`answer_question` raises `NotImplementedError`), the `INDEX` job type has no
-handler, and `POST /api/v1/qa` returns **501**. This is last on purpose: Q&A over
-past meetings inherits every upstream error, so it waits until the transcripts
-underneath it are accurate. The config already reserves `CHROMA_DIR` and
-`EMBEDDING_MODEL`; the design note that matters is that **Postgres is the source
-of truth and Chroma is a derived index**, which is why `reindex_all` is a primary
-entry point rather than a maintenance script bolted on later.
+[`services/rag/`](../backend/app/services/rag/) indexes overlapping, attributed
+transcript windows after the grounding job succeeds. Chroma is a derived cache:
+each meeting index is replaced atomically on re-index and `reindex_all` rebuilds
+the entire collection from PostgreSQL. Retrieval gives the configured structured
+LLM only the top matching windows and requires it to return evidence-window
+numbers. An answer without valid citations is withheld rather than presented as
+a confident guess.
+
+The meeting page's **Ask this meeting** panel supplies its meeting id with every
+question, so a response can only cite that call's transcript. Citations remain
+visible in the conversation and link back to the transcript section.

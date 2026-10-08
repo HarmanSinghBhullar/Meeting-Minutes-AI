@@ -14,11 +14,16 @@ Requires-Dist: alembic>=1.14
 Requires-Dist: faster-whisper>=1.1
 Requires-Dist: nvidia-cublas-cu12; sys_platform == "win32"
 Requires-Dist: nvidia-cudnn-cu12; sys_platform == "win32"
+Requires-Dist: groq>=0.11
+Requires-Dist: google-genai>=1.0
 Requires-Dist: openai>=1.60
 Requires-Dist: anthropic>=0.40
 Provides-Extra: diarization
-Requires-Dist: pyannote.audio>=3.3; extra == "diarization"
-Requires-Dist: torch>=2.4; extra == "diarization"
+Requires-Dist: pyannote.audio<4,>=3.3; extra == "diarization"
+Requires-Dist: torch<2.6,>=2.4; extra == "diarization"
+Requires-Dist: torchaudio<2.6,>=2.4; extra == "diarization"
+Requires-Dist: huggingface_hub<1,>=0.23; extra == "diarization"
+Requires-Dist: speechbrain<1.1,>=1.0; extra == "diarization"
 Provides-Extra: rag
 Requires-Dist: chromadb>=0.5; extra == "rag"
 Requires-Dist: sentence-transformers>=3.3; extra == "rag"

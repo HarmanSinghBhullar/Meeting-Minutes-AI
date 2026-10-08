@@ -3,7 +3,7 @@
 import uuid
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db.models.enums import MinutesItemType, SpeakerSource
 
@@ -65,10 +65,23 @@ class MinutesOut(BaseModel):
 
 
 class QuestionIn(BaseModel):
-    """A question over previous meetings (phase-2 RAG)."""
+    """A grounded question over all indexed meetings or one specified meeting."""
 
-    question: str
-    top_k: int = 8
+    question: str = Field(min_length=1, max_length=2_000)
+    top_k: int = Field(default=8, ge=1, le=20)
+    #: Omit this to search the user's whole meeting library. The meeting page
+    #: always supplies it: a question about *this* call must not be answered by
+    #: a similarly worded discussion from another call.
+    meeting_id: uuid.UUID | None = None
+
+    @field_validator("question")
+    @classmethod
+    def question_has_content(cls, value: str) -> str:
+        """Reject whitespace-only queries before they reach retrieval."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question must not be blank.")
+        return cleaned
 
 
 class CitationOut(BaseModel):

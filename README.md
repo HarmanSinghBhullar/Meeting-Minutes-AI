@@ -72,7 +72,7 @@ This page is the argument. [`docs/`](docs/README.md) is the reference:
 | Transcription | `faster-whisper` `large-v3`, int8_float16 | The big model earns its keep on exactly the words minutes are made of: names, products, acronyms |
 | Diarization | `pyannote.audio` `speaker-diarization-3.1` | The only attribution source. Anonymous clusters, named once by a human — a scrape of the meeting UI was free and faster, but broke silently on every reskin |
 | Minutes | Groq (`llama-3.3-70b-versatile`), structured output + grounding pass | Provider is a one-line switch (`LLM_PROVIDER`); Google, OpenAI, and Anthropic are installed and A/B-testable on the eval set |
-| RAG | ChromaDB (phase 2) | Inherits every upstream error, so it goes last |
+| RAG | ChromaDB + grounded LLM | Searches cited transcript windows after grounding |
 
 ## Running it
 
@@ -203,11 +203,10 @@ The extension's upload path has been exercised against the API on a live
 recording, and the transcript-only path is still verifiable in isolation with
 `scripts/smoke_transcribe.py`.
 
-**Not yet built:**
-
-- RAG. `services/rag/` (`answer_question`) and the `INDEX` pipeline stage are
-  stubbed, and `api/v1/routes/qa.py` returns `501`. Deliberately last: Q&A
-  inherits every upstream error, so it waits until the transcripts are accurate.
+**RAG:** after grounding completes, the worker indexes overlapping transcript
+windows in Chroma. `POST /api/v1/qa` retrieves those windows and returns only an
+answer carrying citations to the meeting timestamp(s) that support it. Install
+the optional dependencies with `pip install -e ".[rag]"`.
 
 ## Recording consent
 

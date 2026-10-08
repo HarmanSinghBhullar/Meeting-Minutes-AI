@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getMeeting, getMinutes, getSpeakerMapping, getTranscript } from '@/lib/api';
+import { MeetingChat } from './MeetingChat';
 import { SpeakerMapping } from './SpeakerMapping';
 import type {
   Meeting as MeetingModel,
@@ -164,6 +165,14 @@ export function Meeting({ meetingId }: Props): JSX.Element {
           />
         </div>
       )}
+
+      <MeetingChat
+        meetingId={meetingId}
+        // A legacy meeting can be indexed with scripts/reindex_rag.py and has no
+        // historical INDEX job row. Once the transcript is stable, let the API
+        // decide whether an index exists instead of permanently disabling chat.
+        indexed={transcript.length > 0 && !pending && !needsMapping}
+      />
 
       {minutes ? (
         <MinutesView minutes={minutes} speakers={speakers} segments={segments} />
@@ -370,7 +379,7 @@ function Transcript({
   const allOpen = visible.length > 0 && visible.every((b) => openMinutes.has(b.minute));
 
   return (
-    <section>
+    <section id="transcript">
       <div className="transcript-head">
         <h2>Transcript</h2>
 

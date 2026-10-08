@@ -58,6 +58,7 @@ from app.services.attribution.pyannote_provider import PyannoteProvider
 from app.services.audio import ffmpeg, storage
 from app.services.minutes.extractor import ExtractedItem, extract, summarize
 from app.services.minutes.grounding import verify
+from app.services.rag.indexer import index_meeting
 from app.services.transcription.base import TranscriptionResult
 from app.services.transcription.faster_whisper_provider import FasterWhisperProvider
 from app.services.translation import needs_translation, translate_segments
@@ -665,6 +666,17 @@ def run_ground(db: Session, meeting_id: uuid.UUID) -> None:
         # anything is either lucky or broken, and it is worth knowing which.
         logger.info("Grounding rejected nothing — worth spot-checking that it is working.")
 
+    # Search becomes available only after the same quality checks that gate the
+    # minutes have completed.
+    enqueue(db, meeting_id, JobType.INDEX)
+    db.commit()
+
+
+def run_index(db: Session, meeting_id: uuid.UUID) -> None:
+    """Refresh this meeting's derived vector index."""
+    count = index_meeting(db, meeting_id)
+    logger.info("Indexed %d RAG window(s) for meeting %s", count, meeting_id)
+
 
 def _meeting_date(meeting: Meeting) -> date | None:
     """The day the meeting happened, for resolving relative deadlines.
@@ -697,4 +709,5 @@ HANDLERS = {
     JobType.TRANSLATE: run_translate,
     JobType.MINUTES: run_minutes,
     JobType.GROUND: run_ground,
+    JobType.INDEX: run_index,
 }

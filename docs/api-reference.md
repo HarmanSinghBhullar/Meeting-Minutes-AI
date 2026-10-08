@@ -19,7 +19,7 @@ All request and response bodies are JSON unless noted. Field names on the wire a
 - [Meetings](#meetings) — the dashboard's read/manage path
 - [Speakers](#speakers) — the mapping gate
 - [Minutes](#minutes)
-- [Q&A](#qa) — 501, phase 2
+- [Q&A](#qa)
 
 ---
 
@@ -324,20 +324,24 @@ the edge is not enforced.
 
 ## Q&A
 
-### `POST /api/v1/qa` → **`501`**
+### `POST /api/v1/qa` → **`200`**
 
-**Body** — `QuestionIn`: `{ question: string, top_k: int = 8 }`. Declared response
-is `AnswerOut` (`{ answer, citations: CitationOut[] }`), which is what it will
-return when it exists.
+**Body** — `QuestionIn`: `{ question: string, top_k: int = 8 }`, where `top_k`
+is 1–20. Response is `AnswerOut` (`{ answer, citations: CitationOut[] }`).
 
-Always raises `501`:
+`meeting_id` is optional: the meeting chat sends it so retrieval cannot leak in
+similarly worded evidence from a different call; omitting it searches every
+indexed meeting.
 
-> *"RAG Q&A is phase 2. It lands once the transcripts it would read are
-> accurate."*
+The route retrieves overlapping transcript windows from Chroma and asks the
+configured structured LLM to answer only from those windows. It returns an
+answer only when the model names valid evidence-window citations; otherwise the
+answer explicitly says the evidence was insufficient and `citations` is empty.
+Each citation carries the meeting id, title, participant(s), timestamp, and the
+retrieved text window.
 
-The route, the schemas, and `services/rag/` are all in place and deliberately
-unimplemented. Q&A inherits every upstream error, so it waits. See
-[Architecture](architecture.md#deliberately-not-built).
+**Errors:** `503` if the optional RAG dependencies are not installed. Install
+them with `pip install -e ".[rag]"`.
 
 ---
 
@@ -353,4 +357,4 @@ unimplemented. Q&A inherits every upstream error, so it waits. See
 | `404` | Missing meeting / speaker / segment / minutes; wrong-meeting scoping |
 | `409` | Already-resolved cluster; regenerate while unmapped |
 | `422` | Pydantic validation — including "exactly one of" on a resolution |
-| `501` | Q&A |
+| `503` | RAG optional dependencies unavailable |

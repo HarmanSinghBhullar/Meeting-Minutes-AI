@@ -44,10 +44,10 @@ From [`db/models/enums.py`](../backend/app/db/models/enums.py):
 `Track.MIXED` is reserved and unused — nothing mixes the tracks today, and the
 [two-track split](architecture.md#two-tracks-not-one) is the reason.
 
-Only four `JobType` members have handlers (`TRANSCRIBE`, `TRANSLATE`, `MINUTES`,
-`GROUND`). `NORMALIZE`, `DIARIZE`, and `ALIGN` are stages *inside* the transcribe
-job rather than jobs; `INDEX` is phase 2. Enqueuing one of them fails the job with
-"No handler registered".
+Five `JobType` members have handlers (`TRANSCRIBE`, `TRANSLATE`, `MINUTES`,
+`GROUND`, `INDEX`). `NORMALIZE`, `DIARIZE`, and `ALIGN` are stages *inside* the
+transcribe job. `GROUND` queues `INDEX`, which refreshes the derived Chroma
+windows for the meeting.
 
 ### `SpeakerSource` is load-bearing
 

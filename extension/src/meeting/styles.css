@@ -84,6 +84,86 @@ h2 {
   font-size: 16px;
 }
 
+/* --- Grounded meeting chat --- */
+
+.meeting-chat {
+  margin-top: 30px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--quote-bg);
+}
+
+.meeting-chat h2 {
+  margin-top: 0;
+}
+
+.chat-turn {
+  margin: 16px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-question {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.chat-answer {
+  margin: 0;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.chat-form input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.chat-form button {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-form button:disabled,
+.chat-form input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chat-citations {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.chat-citations summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.chat-citations blockquote {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+}
+
+.chat-citations p {
+  margin: 0 0 4px;
+}
+
 /* --- Attendance --- */
 
 /* A register reads as a row of names, not a bulleted column: it is a short

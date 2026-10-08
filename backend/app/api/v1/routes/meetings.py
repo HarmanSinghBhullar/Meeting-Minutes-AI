@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.schemas.meeting import MeetingOut, MeetingUpdate
 from app.schemas.transcript import SegmentCorrection, SegmentOut
 from app.services.audio import storage
+from app.services.rag.store import get_collection
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -72,6 +73,13 @@ def delete_meeting(meeting_id: uuid.UUID, db: Session = Depends(get_db)) -> None
 
     db.delete(meeting)
     db.commit()
+
+    # Chroma is derived data and has no foreign keys. A missing optional RAG
+    # install must not prevent a user from deleting their meeting.
+    try:
+        get_collection().delete(where={"meeting_id": str(meeting_id)})
+    except RuntimeError:
+        pass
 
     # After the row is gone, so a failed file delete cannot strand a meeting that
     # is half-deleted in the one place the user looks — the database.

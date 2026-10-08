@@ -7,6 +7,8 @@ sqlalchemy>=2.0
 psycopg[binary]>=3.2
 alembic>=1.14
 faster-whisper>=1.1
+groq>=0.11
+google-genai>=1.0
 openai>=1.60
 anthropic>=0.40
 
@@ -22,8 +24,11 @@ ruff>=0.8
 mypy>=1.13
 
 [diarization]
-pyannote.audio>=3.3
-torch>=2.4
+pyannote.audio<4,>=3.3
+torch<2.6,>=2.4
+torchaudio<2.6,>=2.4
+huggingface_hub<1,>=0.23
+speechbrain<1.1,>=1.0
 
 [rag]
 chromadb>=0.5
