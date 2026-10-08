@@ -1,21 +1,34 @@
-"""RAG Q&A routes — the phase-2 add-on.
-
-Stubbed out deliberately. Q&A over past meetings inherits every error in the
-transcripts underneath it, so there is nothing to be gained by building it before
-attribution and minutes are accurate.
-"""
+"""Grounded Q&A over indexed meeting transcript windows."""
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.schemas.transcript import AnswerOut, QuestionIn
+from app.schemas.transcript import AnswerOut, CitationOut, QuestionIn
+from app.services.rag.retriever import answer_question
 
 router = APIRouter(prefix="/qa", tags=["qa"])
 
 
 @router.post("", response_model=AnswerOut)
 def ask(payload: QuestionIn) -> AnswerOut:
-    """Answer a question over previously recorded meetings."""
-    raise HTTPException(
-        status.HTTP_501_NOT_IMPLEMENTED,
-        "RAG Q&A is phase 2. It lands once the transcripts it would read are accurate.",
+    """Answer a question over previous meetings."""
+    try:
+        answer = answer_question(
+            payload.question, top_k=payload.top_k, meeting_id=payload.meeting_id
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    # ``Citation`` is a service-layer dataclass; map it explicitly at the API
+    # boundary rather than relying on Pydantic to infer attributes from it.
+    return AnswerOut(
+        answer=answer.text,
+        citations=[
+            CitationOut(
+                meeting_id=citation.meeting_id,
+                meeting_title=citation.meeting_title,
+                speaker=citation.speaker,
+                start_ms=citation.start_ms,
+                text=citation.text,
+            )
+            for citation in answer.citations
+        ],
     )

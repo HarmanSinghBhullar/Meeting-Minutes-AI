@@ -7,3 +7,9 @@ meeting_minutes_backend.egg-info/dependency_links.txt
 meeting_minutes_backend.egg-info/requires.txt
 meeting_minutes_backend.egg-info/top_level.txt
 tests/test_alignment.py
+tests/test_minutes_extractor.py
+tests/test_pipeline_inputs.py
+tests/test_rag.py
+tests/test_roster.py
+tests/test_speaker_mapping.py
+tests/test_translation.py

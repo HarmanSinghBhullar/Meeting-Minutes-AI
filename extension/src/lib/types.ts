@@ -28,6 +28,9 @@ export interface SpeakerEvent {
   speakerExternalRef?: string;
   startMs: number;
   endMs: number;
+  /** How the name was determined. Defaults to `dom` (active speaker) on the
+   *  backend; `presenter` marks audio attributed to the screen-sharer instead. */
+  source?: 'dom' | 'presenter';
 }
 
 /** What the content script knows about the meeting when recording starts. */
@@ -50,6 +53,7 @@ export type ExtensionMessage =
   // hold a MediaRecorder (MV3 service workers have no DOM).
   | { type: 'OFFSCREEN_START'; streamId: string; meetingId: string }
   | { type: 'OFFSCREEN_STOP' }
+  | { type: 'OFFSCREEN_GET_STATE' }
 
   // service worker -> content script
   | { type: 'GET_MEETING_CONTEXT' }
@@ -57,7 +61,32 @@ export type ExtensionMessage =
   | { type: 'RECORDING_STOPPED' }
 
   // content script -> service worker
-  | { type: 'SPEAKER_EVENTS'; events: SpeakerEvent[] };
+  | { type: 'SPEAKER_EVENTS'; events: SpeakerEvent[] }
+  /** The roster as it looks now — sent whenever it grows, not just at the start.
+   *  Someone who joins mid-meeting is a real attendee, and the read taken in the
+   *  record click's call stack cannot know about them. */
+  | { type: 'PARTICIPANTS'; participants: Participant[] }
+  /** The user has joined a call on this tab (crossed from the green room into the
+   *  meeting). The service worker uses it to nudge them to record — never to start
+   *  recording, which stays a deliberate click for consent reasons. */
+  | { type: 'MEETING_JOINED' }
+  /** The user has left the call on this tab. If a recording is running on it, the
+   *  service worker stops and finalizes it; otherwise it just clears the nudge. */
+  | { type: 'MEETING_LEFT' }
+  /** The user clicked "Start recording" in the in-page panel. The service worker
+   *  records the *sender's* tab — this is the popup's START_RECORDING without a
+   *  tabId, since the content script cannot know its own. May fail if Chrome
+   *  refuses tab capture outside a toolbar-click gesture; the reply says so. */
+  | { type: 'REQUEST_START_RECORDING' }
+  /** The content script asking for the current settings. It reads them from the
+   *  worker rather than importing `lib/settings` directly: a content script is
+   *  loaded as a classic script, so pulling in a module shared with another entry
+   *  point makes Rollup emit an `import` it cannot execute. The reply is `Settings`. */
+  | { type: 'GET_SETTINGS' }
+  /** The content script asking which keyboard shortcut is bound to start/stop
+   *  recording, to show it in the panel. The reply is the shortcut string (e.g.
+   *  "Alt+Shift+R"), or '' when nothing is bound. */
+  | { type: 'GET_START_SHORTCUT' };
 
 export interface RecordingState {
   isRecording: boolean;
@@ -65,11 +94,58 @@ export interface RecordingState {
   startedAt?: number;
 }
 
+/**
+ * The shape every reply to a `sendMessage` takes.
+ *
+ * A listener that returns without replying still *receives* the message, but the
+ * promise `sendMessage` returned rejects. That combination — the work happens,
+ * the caller is told it failed — is how a recording once kept running for ten
+ * minutes after it had been stopped. So replies are mandatory, and typing them
+ * is how we keep them that way.
+ */
+export type Reply<T> = { ok: true; result: T } | { ok: false; error: string };
+
+/** Reply to `OFFSCREEN_GET_STATE`.
+ *
+ *  The offscreen document holds the MediaRecorder, so it — not the service
+ *  worker's `state` variable — is the authority on whether audio is being
+ *  captured. */
+export interface OffscreenState {
+  isRecording: boolean;
+  meetingId?: string;
+}
+
+/** Reply to `OFFSCREEN_STOP`, sent only once every chunk has been uploaded.
+ *
+ *  `failed` is surfaced rather than swallowed: a chunk that never arrived is a
+ *  silent hole in the transcript, and a hole nobody knows about is one nobody
+ *  can account for when the minutes come out short. */
+export interface StopResult {
+  uploaded: number;
+  failed: number;
+}
+
+/** Reply to `RECORDING_STOPPED`: what the content script had not flushed yet,
+ *  handed back directly so the service worker can post it before it finalizes
+ *  the meeting. */
+export interface StoppedResult {
+  events: SpeakerEvent[];
+  /** Roster members seen since the last post — including anyone who joined in
+   *  the final seconds, who would otherwise be dropped on the way out. */
+  participants: Participant[];
+}
+
 /* --- Read models, as returned by the API --- */
 
 /** How a speaker was identified. The UI shows a guessed name differently from a
  *  known one, so the user knows which to double-check. */
-export type SpeakerSource = 'local_track' | 'dom' | 'diarization' | 'manual' | 'unknown';
+export type SpeakerSource =
+  | 'local_track'
+  | 'dom'
+  | 'presenter'
+  | 'diarization'
+  | 'manual'
+  | 'unknown';
 
 export type MinutesItemType =
   | 'decision'
@@ -83,9 +159,46 @@ export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 export interface Speaker {
   id: string;
   displayName: string;
+  /** `'diarization'` is the one value that means "this is not a person yet" —
+   *  it is a voice the diarizer separated out that nobody has named. That makes
+   *  it the meeting's unmapped-speaker signal, and it is why the dashboard can
+   *  show "needs speakers" without asking the server anything extra. */
   source: SpeakerSource;
   isLocalUser: boolean;
+  /** Marked by a human as not-a-participant: a shared video, hold music. Still
+   *  in the transcript, kept out of the minutes. */
+  isExcluded: boolean;
 }
+
+/** A voice the diarizer found and nobody has identified yet.
+ *
+ *  `samples` is the load-bearing field. "SPEAKER_01" identifies nobody; the
+ *  longest thing that voice said usually identifies them instantly to anyone who
+ *  was in the meeting. Without the samples this UI would be a guessing game. */
+export interface SpeakerCluster {
+  id: string;
+  displayName: string;
+  segmentCount: number;
+  totalMs: number;
+  samples: string[];
+}
+
+/** Everything the speaker-mapping panel needs, in one response. */
+export interface SpeakerMapping {
+  /** Unnamed voices, longest-talking first. */
+  clusters: SpeakerCluster[];
+  /** Roster participants a cluster can be mapped onto. Never includes the local
+   *  user: their audio is the mic track, which is never diarized. */
+  candidates: Speaker[];
+  /** True when that resolution was the last one and the minutes are now queued. */
+  minutesQueued: boolean;
+}
+
+/** How a cluster was identified. Exactly one field, matching the API. */
+export type SpeakerResolution =
+  | { targetSpeakerId: string }
+  | { displayName: string }
+  | { ignore: true };
 
 export interface Job {
   id: string;
@@ -139,4 +252,19 @@ export interface Minutes {
   summary: string | null;
   version: number;
   items: MinutesItem[];
+}
+
+/**
+ * User-controllable behaviour for the auto-record helpers.
+ *
+ * Both default on, and both are deliberately conservative about consent:
+ * `autoPromptOnJoin` only *nudges* (it never starts a recording on its own — that
+ * stays an explicit click), and `autoStopOnLeave` only ever ends a recording the
+ * user themselves started. Stored in `chrome.storage.local`; see `lib/settings`.
+ */
+export interface Settings {
+  /** Light the toolbar icon when a call is detected, inviting a one-click record. */
+  autoPromptOnJoin: boolean;
+  /** Stop and finalize automatically when the recorded meeting ends or its tab closes. */
+  autoStopOnLeave: boolean;
 }

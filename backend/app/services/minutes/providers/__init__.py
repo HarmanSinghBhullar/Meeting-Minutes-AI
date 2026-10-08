@@ -21,6 +21,30 @@ def get_provider() -> StructuredLLM:
     """
     provider = settings.llm_provider.lower()
 
+    if provider == "groq":
+        if not settings.groq_api_key:
+            raise RuntimeError(
+                "LLM_PROVIDER is 'groq' but GROQ_API_KEY is not set. "
+                "Minutes cannot be generated."
+            )
+        # Imported lazily so that an install using only one provider does not
+        # need the others' SDKs present.
+        from app.services.minutes.providers.groq_provider import GroqProvider
+
+        return GroqProvider(api_key=settings.groq_api_key)
+
+    if provider == "google":
+        if not settings.google_api_key:
+            raise RuntimeError(
+                "LLM_PROVIDER is 'google' but GOOGLE_API_KEY is not set. "
+                "Minutes cannot be generated."
+            )
+        # Imported lazily so that an install using only one provider does not
+        # need the others' SDKs present.
+        from app.services.minutes.providers.google_provider import GoogleProvider
+
+        return GoogleProvider(api_key=settings.google_api_key)
+
     if provider == "openai":
         if not settings.openai_api_key:
             raise RuntimeError(
@@ -44,5 +68,6 @@ def get_provider() -> StructuredLLM:
         return AnthropicProvider(api_key=settings.anthropic_api_key)
 
     raise RuntimeError(
-        f"Unknown LLM_PROVIDER {settings.llm_provider!r}. Expected 'openai' or 'anthropic'."
+        f"Unknown LLM_PROVIDER {settings.llm_provider!r}. "
+        "Expected 'groq', 'google', 'openai', or 'anthropic'."
     )

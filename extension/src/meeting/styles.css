@@ -1,15 +1,21 @@
 :root {
+  --bg: #ffffff;
   --text: #1f2328;
   --muted: #6b7280;
   --line: #e5e7eb;
   --accent: #1a56db;
+  --accent-bg: #eaf1fd;
   --warn: #b45309;
   --warn-bg: #fffbeb;
   --quote-bg: #f6f8fa;
+  --hover: #f6f8fa;
+  --mark: #fde68a;
+  --mark-text: #1f2328;
 }
 
 body {
   margin: 0;
+  background: var(--bg);
   color: var(--text);
   font: 15px/1.6 system-ui, sans-serif;
 }
@@ -21,23 +27,198 @@ main {
 }
 
 header h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
+  margin: 0 0 6px;
+  font-size: 26px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 h2 {
   margin: 32px 0 8px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--muted);
+}
+
+/* Anything that can be operated says so when tabbed to. The page is mostly
+   disclosure controls, so without this a keyboard user is navigating blind. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* --- Header facts --- */
+
+/* When, how long, how many people, how much was said — separated by dots the
+   markup owns, so no fact has to carry a trailing "·" it might be last to use. */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.facts span + span::before {
+  content: '·';
+  margin-right: 8px;
 }
 
 .summary {
   padding: 16px 0;
   border-bottom: 1px solid var(--line);
   font-size: 16px;
+}
+
+.minutes-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.minutes-list li {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+/* --- Grounded meeting chat --- */
+
+.meeting-chat {
+  margin-top: 30px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--quote-bg);
+}
+
+.meeting-chat h2 {
+  margin-top: 0;
+}
+
+.chat-turn {
+  margin: 16px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-question {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.chat-answer {
+  margin: 0;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.chat-form input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.chat-form button {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-form button:disabled,
+.chat-form input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chat-citations {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.chat-citations summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.chat-citations blockquote {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+}
+
+.chat-citations p {
+  margin: 0 0 4px;
+}
+
+/* --- Attendance --- */
+
+/* A register reads as a row of names, not a bulleted column: it is a short
+   list of facts, and stacking it wastes the width the transcript needs. */
+.attendance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attendee {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 12px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.attendee .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+/* The local user is the one attendee the system knows rather than inferred. */
+.attendee.you {
+  border-color: var(--accent);
+}
+
+.attendee.you .dot {
+  background: var(--accent);
+}
+
+/* The gap in the register. Muted rather than alarming: unnamed voices are a
+   question waiting on an answer, not an error — and the answer is one click
+   away, so the line is a link rather than a notice. */
+.unidentified {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.unidentified a {
+  color: var(--muted);
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.unidentified a:hover {
+  color: var(--accent);
 }
 
 .muted {
@@ -49,6 +230,210 @@ h2 {
   color: #b91c1c;
 }
 
+/* --- Back link --- */
+
+.back {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.back a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.back a:hover {
+  text-decoration: underline;
+}
+
+/* --- Dashboard --- */
+
+.meeting-list {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meeting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.meeting-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.meeting-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.meeting-title:hover {
+  text-decoration: underline;
+}
+
+.meeting-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.meeting-actions {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.link.danger {
+  color: #b91c1c;
+}
+
+.rename-form {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--quote-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--quote-bg);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge.ready {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.badge.working {
+  color: var(--accent);
+}
+
+.badge.failed {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+/* The only badge that is a request rather than a report. Coloured like the links
+   it sits beside, because it means "there is something for you to do here" —
+   whereas the green of "ready" and the amber of "failed" both mean "nothing to
+   do, for opposite reasons". */
+.badge.needs-input {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* --- Speaker mapping --- */
+
+.mapping {
+  margin-top: 24px;
+  padding: 4px 18px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+}
+
+/* This panel is a question, and a question the page will not proceed past. It
+   gets a border and a tint for the same reason it sits above the minutes: every
+   other section reports something, and it is the one asking. */
+.mapping h2 {
+  color: var(--accent);
+}
+
+.cluster-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cluster {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cluster:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.cluster-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+}
+
+.cluster-label {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-stats {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The evidence, and the largest thing in the row. Identifying a voice is done by
+   reading what it said; the dropdown is only how the answer is recorded. */
+.cluster-samples {
+  background: var(--quote-bg);
+}
+
+.cluster-pick {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.cluster-pick select {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--quote-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.cluster-name-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.link.strong {
+  font-weight: 600;
+}
+
 /* --- Minutes items --- */
 
 .items {
@@ -58,8 +443,18 @@ h2 {
 }
 
 .item {
-  padding: 12px 0;
+  padding: 12px;
+  margin: 0 -12px;
   border-bottom: 1px solid var(--line);
+  border-radius: 8px;
+  transition: background 0.12s ease;
+}
+
+/* The row lifts under the cursor because the whole row is a thing you act on —
+   the citation link inside it is the point of the item, and a target that only
+   appears once you have already found it is not much of an affordance. */
+.item:hover {
+  background: var(--hover);
 }
 
 /* An item the grounding pass could not support. Visibly set apart rather than
@@ -128,6 +523,138 @@ blockquote p:last-child {
 
 /* --- Transcript --- */
 
+/* Sticky, because it holds the search box and the transcript is the longest
+   thing on the page — a search you have to scroll back up to reach is one you
+   use once and then stop using. */
+.transcript-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.transcript-head h2 {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* Wide enough for a phrase, not so wide it reads as the page's main event —
+   the transcript is. */
+.search {
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--quote-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.search::placeholder {
+  color: var(--muted);
+}
+
+.search:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.transcript-head .count,
+.transcript-head .link {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  padding: 20px 4px;
+}
+
+mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--mark);
+  color: var(--mark-text);
+}
+
+/* One expandable group per minute. The rows are a list you scan, so they get a
+   list's density and separators rather than cards. */
+.minute {
+  border-bottom: 1px solid var(--line);
+}
+
+.minute:first-of-type {
+  border-top: 1px solid var(--line);
+}
+
+.minute-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 10px 4px;
+  cursor: pointer;
+  list-style: none; /* the default triangle; replaced below */
+  user-select: none;
+}
+
+.minute-head::-webkit-details-marker {
+  display: none;
+}
+
+.minute-head:hover {
+  background: var(--quote-bg);
+}
+
+/* A caret we control, so it can sit at a fixed width and keep the time ranges
+   aligned down the column — they are the thing being scanned. */
+.minute-head::before {
+  content: '▸';
+  width: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.12s ease;
+}
+
+.minute[open] > .minute-head::before {
+  transform: rotate(90deg);
+}
+
+.minute-range {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.minute-stats {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Who spoke in this minute, and the reason the row is worth collapsing: it is
+   what lets a reader find the bit they remember without opening every group. */
+.minute-speakers {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.minute-body {
+  padding: 4px 4px 14px 16px;
+}
+
 .transcript p {
   margin: 0 0 6px;
 }
@@ -153,20 +680,32 @@ blockquote p:last-child {
 
 @media (prefers-color-scheme: dark) {
   :root {
+    --bg: #0d1117;
     --text: #e6edf3;
     --muted: #9198a1;
     --line: #30363d;
     --accent: #6ea8fe;
+    --accent-bg: #10203a;
     --warn: #d29922;
     --warn-bg: #2b2413;
     --quote-bg: #161b22;
-  }
-
-  body {
-    background: #0d1117;
+    --hover: #161b22;
+    /* Amber on dark would glare; the accent tint reads as a highlight without
+       shouting, and the text keeps its own colour so the line stays legible. */
+    --mark: #1f3a63;
+    --mark-text: #e6edf3;
   }
 
   .error {
     color: #ff7b72;
+  }
+
+  .link.danger {
+    color: #ff7b72;
+  }
+
+  .badge.ready {
+    color: #7ee2a8;
+    background: #123020;
   }
 }

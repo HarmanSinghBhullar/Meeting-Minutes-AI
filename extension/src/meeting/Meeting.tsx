@@ -15,19 +15,31 @@
  * the only thing that makes the clean screen worth anything.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { getMeeting, getMinutes, getTranscript } from '@/lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getMeeting, getMinutes, getSpeakerMapping, getTranscript } from '@/lib/api';
+import { MeetingChat } from './MeetingChat';
+import { SpeakerMapping } from './SpeakerMapping';
 import type {
   Meeting as MeetingModel,
   Minutes as MinutesModel,
   MinutesItem,
   MinutesItemType,
   Speaker,
+  SpeakerMapping as SpeakerMappingModel,
   TranscriptSegment,
 } from '@/lib/types';
 
 /** How often we re-check while the pipeline is still running. */
 const POLL_INTERVAL_MS = 3_000;
+
+/** The transcript is grouped into buckets this wide. */
+const MINUTE_MS = 60_000;
+
+/** How many speaker names a collapsed minute names before it starts counting. */
+const PREVIEW_SPEAKERS = 2;
+
+/** Links Attendance's "not identified yet" count to the panel that answers it. */
+const MAPPING_ANCHOR = 'speaker-mapping';
 
 const SECTIONS: { type: MinutesItemType; title: string }[] = [
   // Action items first: they are the part somebody has to do something about.
@@ -46,18 +58,21 @@ export function Meeting({ meetingId }: Props): JSX.Element {
   const [meeting, setMeeting] = useState<MeetingModel | null>(null);
   const [minutes, setMinutes] = useState<MinutesModel | null>(null);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [mapping, setMapping] = useState<SpeakerMappingModel | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [m, mins, segs] = await Promise.all([
+      const [m, mins, segs, map] = await Promise.all([
         getMeeting(meetingId),
         getMinutes(meetingId),
         getTranscript(meetingId),
+        getSpeakerMapping(meetingId),
       ]);
       setMeeting(m);
       setMinutes(mins);
       setTranscript(segs);
+      setMapping(map);
       setError(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -81,23 +96,47 @@ export function Meeting({ meetingId }: Props): JSX.Element {
     return () => window.clearInterval(timer);
   }, [pending, load]);
 
+  // Resolving the last cluster queues the minutes server-side, so the page has to
+  // go back to polling — otherwise it would sit on "no minutes yet" while they
+  // were being written three feet away.
+  const handleResolved = useCallback(
+    (next: SpeakerMappingModel) => {
+      setMapping(next);
+      if (next.minutesQueued) void load();
+    },
+    [load],
+  );
+
   if (error) return <p className="error">{error}</p>;
   if (!meeting) return <p className="muted">Loading…</p>;
 
   const speakers = new Map(meeting.speakers.map((s) => [s.id, s]));
   const segments = new Map(transcript.map((s) => [s.id, s]));
   const failed = meeting.jobs.find((j) => j.status === 'failed');
+  const needsMapping = (mapping?.clusters.length ?? 0) > 0;
 
   return (
     <main>
+      <p className="back">
+        <a href="index.html">← All meetings</a>
+      </p>
       <header>
         <h1>{meeting.title ?? 'Untitled meeting'}</h1>
-        <p className="muted">
-          {meeting.startedAt ? new Date(meeting.startedAt).toLocaleString() : 'Date unknown'}
-          {meeting.speakers.length > 0 &&
-            ` · ${meeting.speakers.map((s) => s.displayName).join(', ')}`}
+        <p className="facts">
+          {meetingFacts(meeting, transcript).map((fact, i) => (
+            <span key={i}>{fact}</span>
+          ))}
         </p>
       </header>
+
+      {/* Always rendered. "Who was in this?" is the first question the page is
+          asked, and a section that vanishes when the answer is incomplete reads
+          as a broken page rather than an unfinished one. */}
+      <Attendance
+        speakers={meeting.speakers}
+        unidentified={mapping?.clusters.length ?? 0}
+      />
+
 
       {/* The error text is on the job row for a reason: "ffmpeg is not installed"
           is something the user can act on, and "failed" is not. */}
@@ -114,10 +153,35 @@ export function Meeting({ meetingId }: Props): JSX.Element {
         </p>
       )}
 
+      {/* Above the minutes, because it is the reason there are none. The id is
+          the target of Attendance's count, not decoration: the count is only
+          worth showing if it leads somewhere. */}
+      {needsMapping && mapping && (
+        <div id={MAPPING_ANCHOR}>
+          <SpeakerMapping
+            meetingId={meetingId}
+            mapping={mapping}
+            onResolved={handleResolved}
+          />
+        </div>
+      )}
+
+      <MeetingChat
+        meetingId={meetingId}
+        // A legacy meeting can be indexed with scripts/reindex_rag.py and has no
+        // historical INDEX job row. Once the transcript is stable, let the API
+        // decide whether an index exists instead of permanently disabling chat.
+        indexed={transcript.length > 0 && !pending && !needsMapping}
+      />
+
       {minutes ? (
         <MinutesView minutes={minutes} speakers={speakers} segments={segments} />
       ) : (
-        !pending && <p className="muted">No minutes yet.</p>
+        // "No minutes yet" is only the truth when nothing is standing in their
+        // way. While voices are unnamed the panel above already explains why, and
+        // repeating it as a bare shrug would read as a failure rather than a
+        // question waiting on an answer.
+        !pending && !needsMapping && <p className="muted">No minutes yet.</p>
       )}
 
       {transcript.length > 0 && (
@@ -140,7 +204,16 @@ function MinutesView({
 
   return (
     <section>
-      {minutes.summary && <p className="summary">{minutes.summary}</p>}
+      {minutes.summary && (
+        <div>
+          <h2>Minutes</h2>
+          <ul className="minutes-list">
+            {summaryPoints(minutes.summary).map((point, i) => (
+              <li key={i}>{point}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {rejected > 0 && (
         // Surfaced deliberately. The number is evidence the verifier is awake,
@@ -235,6 +308,20 @@ function Item({
   );
 }
 
+/**
+ * The transcript, collapsed into one expandable group per minute.
+ *
+ * An hour of speech is a thousand lines, and as a flat list it can only be read
+ * by scrolling it — there is no way to see the shape of the meeting or to get
+ * back to the bit you remember. Wall-clock minutes are the coarsest grouping
+ * that is still *navigable*: "around twenty past" is how people actually
+ * remember when something was said, whereas a grouping by speaker or by topic
+ * would be a claim the transcript cannot support.
+ *
+ * So each group is summarised by what a reader needs in order to decide whether
+ * to open it — the time range, how much was said, and who said it — and the
+ * lines themselves are one click away.
+ */
 function Transcript({
   segments,
   speakers,
@@ -242,11 +329,147 @@ function Transcript({
   segments: TranscriptSegment[];
   speakers: Map<string, Speaker>;
 }): JSX.Element {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+
+  const buckets = useMemo(() => bucketByMinute(segments), [segments]);
+
+  // Searching narrows each group to its matching lines and drops the groups
+  // with none. The line count then has to say so — "11 lines" over a group
+  // showing two would be a small lie, and this page is in the business of not
+  // telling those.
+  const visible = useMemo(() => {
+    if (!q) return buckets;
+    const out: MinuteBucket[] = [];
+    for (const bucket of buckets) {
+      const hits = bucket.segments.filter((seg) => segmentMatches(seg, speakers, q));
+      if (hits.length > 0) out.push({ ...bucket, segments: hits });
+    }
+    return out;
+  }, [buckets, q, speakers]);
+
+  const matches = q ? visible.reduce((n, b) => n + b.segments.length, 0) : 0;
+
+  // The first minute opens by default. A section of nothing but collapsed rows
+  // reads as an empty transcript at a glance, and the opening lines are also
+  // the ones most likely to be checked ("did it actually start recording?").
+  const [openMinutes, setOpenMinutes] = useState<Set<number>>(() => {
+    const first = buckets[0];
+    return new Set(first ? [first.minute] : []);
+  });
+
+  // A hit inside a collapsed group is a hit you cannot read. Opening the
+  // matches is the whole reason this search exists rather than leaving people
+  // to Ctrl+F, which cannot see into a closed <details> at all.
+  useEffect(() => {
+    if (!q) return;
+    setOpenMinutes(new Set(visible.map((b) => b.minute)));
+  }, [q, visible]);
+
+  const toggle = useCallback((minute: number, isOpen: boolean) => {
+    setOpenMinutes((prev) => {
+      if (prev.has(minute) === isOpen) return prev;
+      const next = new Set(prev);
+      if (isOpen) next.add(minute);
+      else next.delete(minute);
+      return next;
+    });
+  }, []);
+
+  const allOpen = visible.length > 0 && visible.every((b) => openMinutes.has(b.minute));
+
   return (
-    <section>
-      <h2>Transcript</h2>
+    <section id="transcript">
+      <div className="transcript-head">
+        <h2>Transcript</h2>
+
+        <input
+          // type=search for the browser's own clear button — a control we would
+          // otherwise have to build, and one people already know.
+          type="search"
+          className="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search the transcript…"
+          aria-label="Search the transcript"
+        />
+
+        {q ? (
+          // "matches" would be read as hits, and a line matching on both its
+          // speaker and its words highlights twice — so count what is actually
+          // being counted, in the same unit the groups report.
+          <span className="muted count">
+            {matches} line{matches === 1 ? '' : 's'}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="link"
+            onClick={() =>
+              setOpenMinutes(allOpen ? new Set() : new Set(buckets.map((b) => b.minute)))
+            }
+          >
+            {allOpen ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
+      </div>
+
       <div className="transcript">
-        {segments.map((seg) => (
+        {visible.length === 0 ? (
+          <p className="muted empty">Nothing in this transcript matches “{query.trim()}”.</p>
+        ) : (
+          visible.map((bucket) => (
+            <MinuteGroup
+              key={bucket.minute}
+              bucket={bucket}
+              speakers={speakers}
+              query={q}
+              isOpen={openMinutes.has(bucket.minute)}
+              onToggle={toggle}
+            />
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MinuteGroup({
+  bucket,
+  speakers,
+  query,
+  isOpen,
+  onToggle,
+}: {
+  bucket: MinuteBucket;
+  speakers: Map<string, Speaker>;
+  query: string;
+  isOpen: boolean;
+  onToggle: (minute: number, isOpen: boolean) => void;
+}): JSX.Element {
+  const names = bucketSpeakers(bucket.segments, speakers);
+  const shown = bucket.segments.length;
+
+  return (
+    // <details> rather than a hand-rolled disclosure: it is keyboard-operable
+    // and screen-reader-legible for free, and browsers already know what it is.
+    <details
+      className="minute"
+      open={isOpen}
+      onToggle={(e) => onToggle(bucket.minute, e.currentTarget.open)}
+    >
+      <summary className="minute-head">
+        <span className="minute-range">{formatRange(bucket.minute)}</span>
+        <span className="minute-stats">
+          {query
+            ? `${shown} of ${bucket.total}`
+            : `${bucket.total} line${bucket.total === 1 ? '' : 's'}`}
+        </span>
+        <span className="minute-speakers">{previewSpeakers(names)}</span>
+      </summary>
+
+      <div className="minute-body">
+        {bucket.segments.map((seg) => (
           <p key={seg.id}>
             <span className="ts">{formatTime(seg.startMs)}</span>{' '}
             <span
@@ -256,19 +479,279 @@ function Transcript({
               // do that if they can see which ones are uncertain.
               title={`Speaker source: ${seg.speakerSource}`}
             >
-              {speakerName(seg, speakers)}:
+              <Highlight text={speakerName(seg, speakers)} query={query} />:
             </span>{' '}
-            {seg.textEn ?? seg.text}
+            <Highlight text={seg.textEn ?? seg.text} query={query} />
           </p>
         ))}
       </div>
-    </section>
+    </details>
   );
+}
+
+/** The matched runs of `text`, marked. `query` is already lowercased. */
+function Highlight({ text, query }: { text: string; query: string }): JSX.Element {
+  if (!query) return <>{text}</>;
+
+  const haystack = text.toLowerCase();
+  const parts: JSX.Element[] = [];
+  let cursor = 0;
+  let at = haystack.indexOf(query);
+  let key = 0;
+
+  while (at !== -1) {
+    if (at > cursor) parts.push(<span key={key++}>{text.slice(cursor, at)}</span>);
+    parts.push(<mark key={key++}>{text.slice(at, at + query.length)}</mark>);
+    cursor = at + query.length;
+    at = haystack.indexOf(query, cursor);
+  }
+  if (parts.length === 0) return <>{text}</>;
+  if (cursor < text.length) parts.push(<span key={key++}>{text.slice(cursor)}</span>);
+
+  return <>{parts}</>;
+}
+
+/**
+ * Does a line match the search?
+ *
+ * The speaker's name counts, not just the words: "what did Harry say" is at
+ * least as common a question as "where was ChromaDB mentioned", and the name is
+ * on screen, so a reader has every reason to expect typing it to work.
+ */
+function segmentMatches(
+  seg: TranscriptSegment,
+  speakers: Map<string, Speaker>,
+  query: string,
+): boolean {
+  if ((seg.textEn ?? seg.text).toLowerCase().includes(query)) return true;
+  return speakerName(seg, speakers).toLowerCase().includes(query);
+}
+
+interface MinuteBucket {
+  /** Minutes since the recording started. */
+  minute: number;
+  segments: TranscriptSegment[];
+  /** Lines in this minute before any search narrowed it. */
+  total: number;
+}
+
+/**
+ * Group segments into the wall-clock minute they *started* in.
+ *
+ * Bucketing on the start alone means a segment that straddles a boundary lands
+ * in one group and only one — the alternative, showing it in both, would make
+ * the line counts lie and let a reader see the same sentence twice and wonder
+ * whether it was said twice.
+ *
+ * Minutes in which nobody spoke get no group at all. Rendering them as empty
+ * rows would pad a meeting with a long silence in it with rows that say
+ * nothing, and the range labels already make the gap obvious.
+ */
+function bucketByMinute(segments: TranscriptSegment[]): MinuteBucket[] {
+  const byMinute = new Map<number, TranscriptSegment[]>();
+
+  for (const seg of segments) {
+    const minute = Math.floor(seg.startMs / MINUTE_MS);
+    const existing = byMinute.get(minute);
+    if (existing) existing.push(seg);
+    else byMinute.set(minute, [seg]);
+  }
+
+  // The API returns segments in start order, so each bucket is already ordered;
+  // only the buckets themselves need sorting.
+  return [...byMinute.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([minute, segs]) => ({ minute, segments: segs, total: segs.length }));
+}
+
+/** The distinct speakers in a group, in the order they first spoke. */
+function bucketSpeakers(
+  segments: TranscriptSegment[],
+  speakers: Map<string, Speaker>,
+): string[] {
+  const names: string[] = [];
+  for (const seg of segments) {
+    const name = speakerName(seg, speakers);
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function previewSpeakers(names: string[]): string {
+  if (names.length <= PREVIEW_SPEAKERS + 1) return names.join(', ');
+  const shown = names.slice(0, PREVIEW_SPEAKERS).join(', ');
+  return `${shown} +${names.length - PREVIEW_SPEAKERS} more`;
+}
+
+function formatRange(minute: number): string {
+  return `${formatTime(minute * MINUTE_MS)} – ${formatTime((minute + 1) * MINUTE_MS)}`;
 }
 
 function speakerName(seg: TranscriptSegment, speakers: Map<string, Speaker>): string {
   if (!seg.speakerId) return 'Unknown speaker';
-  return speakers.get(seg.speakerId)?.displayName ?? 'Unknown speaker';
+  const speaker = speakers.get(seg.speakerId);
+  return speaker ? speakerLabel(speaker) : 'Unknown speaker';
+}
+
+/**
+ * A speaker's name as shown to the reader, tagging the local user with "(You)".
+ *
+ * The one exception is the backend's "You" placeholder — the name it falls back
+ * to when the meeting UI never told it who the local user was. Marking that as
+ * "You (You)" would be nonsense, so the tag is added only when there is a real
+ * name to attach it to.
+ */
+function speakerLabel(speaker: Speaker): string {
+  const isPlaceholder = speaker.displayName.trim().toLowerCase() === 'you';
+  return speaker.isLocalUser && !isPlaceholder
+    ? `${speaker.displayName} (You)`
+    : speaker.displayName;
+}
+
+/**
+ * Who was in the meeting, the local user first, each tagged as needed.
+ *
+ * Two kinds of Speaker row are deliberately not attendance. An unnamed
+ * diarization cluster is an open question, not a person — listing "SPEAKER_01"
+ * here would assert that someone by that name attended. And an excluded cluster
+ * is a shared video or a noisy line, which by definition did not attend. Both are
+ * still speakers in the transcript; neither belongs on a register.
+ *
+ * But "not on the register" is not the same as "not worth saying". A meeting
+ * whose roster never got captured has nothing but clusters, and rendering an
+ * empty section for it told the reader their attendance was missing without ever
+ * saying why — the names look lost rather than unasked-for. So the clusters are
+ * *counted* here and named at the panel below: the register keeps its promise to
+ * hold only real people, and the gap in it is still visible.
+ */
+function Attendance({
+  speakers,
+  unidentified,
+}: {
+  speakers: Speaker[];
+  /** Unnamed clusters awaiting the mapping step. Counted, never listed. */
+  unidentified: number;
+}): JSX.Element {
+  const ordered = attendees(speakers);
+
+  return (
+    <section>
+      <h2>Attendance</h2>
+
+      {ordered.length > 0 ? (
+        <ul className="attendance">
+          {ordered.map((s) => (
+            <li key={s.id} className={s.isLocalUser ? 'attendee you' : 'attendee'}>
+              <span className="dot" aria-hidden="true" />
+              {speakerLabel(s)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        // Distinct from the "voices not identified" line below, which is about
+        // clusters waiting on a name. This is the case where the meeting UI never
+        // told us who was there at all, so there is not even a question to answer.
+        unidentified === 0 && <p className="muted">Nobody was recorded in this meeting.</p>
+      )}
+
+      {unidentified > 0 && (
+        <p className="unidentified">
+          <a href={`#${MAPPING_ANCHOR}`}>
+            {unidentified === 1
+              ? '1 voice is not identified yet'
+              : `${unidentified} voices are not identified yet`}
+          </a>
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Who attended, the local user first. See the note on Attendance for who isn't. */
+function attendees(speakers: Speaker[]): Speaker[] {
+  return speakers
+    .filter((s) => s.source !== 'diarization' && !s.isExcluded)
+    .sort((a, b) => Number(b.isLocalUser) - Number(a.isLocalUser));
+}
+
+/**
+ * The one-line summary under the title: when, how long, how many people, how
+ * much was said.
+ *
+ * Each fact is dropped rather than faked when it is not known yet — a meeting
+ * still transcribing has no line count, and "0 lines" would read as a finished
+ * meeting in which nobody spoke.
+ */
+function meetingFacts(meeting: MeetingModel, transcript: TranscriptSegment[]): string[] {
+  const facts: string[] = [];
+
+  facts.push(
+    meeting.startedAt
+      ? // Not toLocaleString(): its seconds are noise on a fact about which
+        // afternoon this was.
+        new Date(meeting.startedAt).toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        })
+      : 'Date unknown',
+  );
+
+  const duration = meetingDuration(meeting, transcript);
+  if (duration) facts.push(duration);
+
+  const people = attendees(meeting.speakers).length;
+  if (people > 0) facts.push(`${people} speaker${people === 1 ? '' : 's'}`);
+
+  if (transcript.length > 0) {
+    facts.push(`${transcript.length} line${transcript.length === 1 ? '' : 's'}`);
+  }
+
+  return facts;
+}
+
+/**
+ * How long the meeting ran.
+ *
+ * Measured from the transcript where there is one: the last word is when the
+ * meeting effectively ended, whereas ended_at includes however long it took the
+ * user to notice and hit stop. Falls back to the recorded times before there is
+ * a transcript to ask.
+ */
+function meetingDuration(
+  meeting: MeetingModel,
+  transcript: TranscriptSegment[],
+): string | null {
+  const lastWord = transcript.reduce((max, seg) => Math.max(max, seg.endMs), 0);
+  if (lastWord > 0) return formatDuration(lastWord);
+
+  if (meeting.startedAt && meeting.endedAt) {
+    const ms = new Date(meeting.endedAt).getTime() - new Date(meeting.startedAt).getTime();
+    if (ms > 0) return formatDuration(ms);
+  }
+  return null;
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / MINUTE_MS);
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/**
+ * Split the stored minutes into display points.
+ *
+ * The backend writes one point per line; older meetings may hold a single prose
+ * paragraph, which simply renders as one point. Any leading bullet glyph the
+ * model slipped in is trimmed so it does not double up with the list marker.
+ */
+function summaryPoints(summary: string): string[] {
+  return summary
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-•*]\s*/, '').trim())
+    .filter(Boolean);
 }
 
 function formatTime(ms: number): string {

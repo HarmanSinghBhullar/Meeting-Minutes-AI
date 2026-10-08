@@ -25,6 +25,12 @@ export class ZoomAdapter implements MeetingAdapter {
     return document.title || null;
   }
 
+  isInCall(): boolean {
+    // Unimplemented, like the rest of this adapter: no reliable in-call selector
+    // yet, so no auto-record nudge on Zoom and recording stays a manual click.
+    return false;
+  }
+
   observe(_onTurn: (turn: ObservedTurn) => void): void {
     // No timeline emitted, so the backend falls back to diarization. That is the
     // designed degradation, not a bug — we lose the names, not the meeting.

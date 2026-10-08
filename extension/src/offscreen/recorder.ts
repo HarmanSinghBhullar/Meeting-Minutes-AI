@@ -23,10 +23,13 @@
  * nothing, starting a recording would silence the meeting. So the tab stream is
  * routed back to the audio context's destination as well as into the recorder.
  * Forgetting this is a classic tabCapture bug and it is very confusing to debug.
+ *
+ * **Why every message is answered.** See the listener below. This is the one that
+ * actually bit us.
  */
 
 import { uploadChunk } from '@/lib/api';
-import type { ExtensionMessage, Track } from '@/lib/types';
+import type { ExtensionMessage, OffscreenState, StopResult, Track } from '@/lib/types';
 
 /**
  * How often MediaRecorder hands us a blob. Small enough that a browser crash
@@ -40,54 +43,133 @@ interface ActiveRecording {
   recorders: MediaRecorder[];
   streams: MediaStream[];
   audioContext: AudioContext;
+  /** Uploads still in flight. `stop` waits on these — see below. */
+  uploads: Set<Promise<void>>;
+  uploaded: number;
+  failed: number;
 }
 
 let active: ActiveRecording | null = null;
 
-chrome.runtime.onMessage.addListener((message: ExtensionMessage) => {
-  if (message.type === 'OFFSCREEN_START') {
-    void start(message.streamId, message.meetingId);
-  } else if (message.type === 'OFFSCREEN_STOP') {
-    stop();
-  }
-});
+/**
+ * Answer every message. Every single one.
+ *
+ * `chrome.runtime.sendMessage` returns a promise that **rejects** if the listener
+ * returns without replying — but the message is still delivered and the work
+ * still happens. A silent listener therefore starts the recorder and tells the
+ * caller it failed.
+ *
+ * That is not hypothetical. It is exactly what this file used to do, and the
+ * consequences were not local to it: the service worker's `await` threw, so it
+ * never marked itself as recording, never told the content script to start its
+ * speaker timeline, and never ran a stop that reached the recorder. Audio
+ * uploaded for ten minutes after the user pressed stop, and no meeting was ever
+ * finalized. One missing `sendResponse` cost the entire end-to-end path.
+ */
+chrome.runtime.onMessage.addListener(
+  (message: ExtensionMessage, _sender, sendResponse: (response?: unknown) => void) => {
+    switch (message.type) {
+      case 'OFFSCREEN_START':
+        void start(message.streamId, message.meetingId).then(
+          (startedAt) => sendResponse({ ok: true, result: { startedAt } }),
+          (err: unknown) => sendResponse({ ok: false, error: String(err) }),
+        );
+        return true; // async response
 
-async function start(streamId: string, meetingId: string): Promise<void> {
-  if (active) return;
+      case 'OFFSCREEN_STOP':
+        void stop().then(
+          (result) => sendResponse({ ok: true, result }),
+          (err: unknown) => sendResponse({ ok: false, error: String(err) }),
+        );
+        return true;
 
-  // The tab's audio: the remote participants.
-  const tabStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      mandatory: {
-        chromeMediaSource: 'tab',
-        chromeMediaSourceId: streamId,
+      case 'OFFSCREEN_GET_STATE': {
+        const result: OffscreenState = active
+          ? { isRecording: true, meetingId: active.meetingId }
+          : { isRecording: false };
+        sendResponse({ ok: true, result });
+        return false;
+      }
+
+      default:
+        return false;
+    }
+  },
+);
+
+/**
+ * Begin recording, and return the instant recording actually began.
+ *
+ * That instant is t=0 for every word timestamp the backend will produce, and the
+ * content script rebases every speaker turn onto it. It is measured *here*, next
+ * to `recorder.start()`, rather than in the service worker once this call
+ * returns: the message round trip is tens of milliseconds and would push t=0 late
+ * by that much, sliding every speaker label out of place. Wrong labels are worse
+ * than no labels.
+ */
+async function start(streamId: string, meetingId: string): Promise<number> {
+  if (active) throw new Error('A recording is already in progress.');
+
+  let tabStream: MediaStream | undefined;
+  let micStream: MediaStream | undefined;
+  let audioContext: AudioContext | undefined;
+
+  try {
+    // The tab's audio: the remote participants.
+    tabStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: streamId,
+        },
       },
-    },
-  } as MediaStreamConstraints);
+    } as MediaStreamConstraints);
 
-  // The microphone: the local user. Permission must already have been granted
-  // via the permission page — an offscreen document cannot show a prompt.
-  const micStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+    // The microphone: the local user. Permission must already have been granted
+    // via the permission page — an offscreen document cannot show a prompt.
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
-  // Keep the meeting audible. Capturing a tab diverts its audio away from the
-  // speakers; routing it to the destination puts it back.
-  const audioContext = new AudioContext();
-  audioContext.createMediaStreamSource(tabStream).connect(audioContext.destination);
+    // Keep the meeting audible. Capturing a tab diverts its audio away from the
+    // speakers; routing it to the destination puts it back.
+    audioContext = new AudioContext();
+    audioContext.createMediaStreamSource(tabStream).connect(audioContext.destination);
 
-  const recorders = [
-    createRecorder(tabStream, 'tab', meetingId),
-    createRecorder(micStream, 'mic', meetingId),
-  ];
+    const recording: ActiveRecording = {
+      meetingId,
+      recorders: [],
+      streams: [tabStream, micStream],
+      audioContext,
+      uploads: new Set(),
+      uploaded: 0,
+      failed: 0,
+    };
 
-  for (const recorder of recorders) recorder.start(TIMESLICE_MS);
+    recording.recorders = [
+      createRecorder(tabStream, 'tab', recording),
+      createRecorder(micStream, 'mic', recording),
+    ];
 
-  active = { meetingId, recorders, streams: [tabStream, micStream], audioContext };
+    const startedAt = Date.now();
+    for (const recorder of recording.recorders) recorder.start(TIMESLICE_MS);
+
+    active = recording;
+    return startedAt;
+  } catch (err: unknown) {
+    // Leave nothing running. A half-started recording is worse than a failed one:
+    // it holds the microphone open with no one tracking it and no way to stop it
+    // short of reloading the extension.
+    for (const stream of [tabStream, micStream]) {
+      if (stream) for (const track of stream.getTracks()) track.stop();
+    }
+    if (audioContext) void audioContext.close();
+    throw err;
+  }
 }
 
 /**
@@ -97,31 +179,66 @@ async function start(streamId: string, meetingId: string): Promise<void> {
  * append into a valid file server-side. That is what makes incremental upload
  * work at all.
  */
-function createRecorder(stream: MediaStream, track: Track, meetingId: string): MediaRecorder {
+function createRecorder(
+  stream: MediaStream,
+  track: Track,
+  recording: ActiveRecording,
+): MediaRecorder {
   const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
 
   recorder.ondataavailable = (event: BlobEvent) => {
     if (event.data.size === 0) return;
-    // Fire-and-forget: a slow upload must not stall the recorder. A failed chunk
-    // is a hole in the transcript, so this is where a retry queue belongs.
-    void uploadChunk(meetingId, track, event.data).catch((err: unknown) => {
-      console.error(`[recorder] ${track} chunk upload failed`, err);
-    });
+
+    // Not awaited — a slow upload must not stall the recorder — but *tracked*, so
+    // that `stop` can wait for the last chunk to land. Finalizing while chunks are
+    // still in flight queues transcription against a file ffmpeg is about to read
+    // while the API is still writing to it.
+    const upload = uploadChunk(recording.meetingId, track, event.data).then(
+      () => {
+        recording.uploaded += 1;
+      },
+      (err: unknown) => {
+        recording.failed += 1;
+        console.error(`[recorder] ${track} chunk upload failed`, err);
+      },
+    );
+
+    recording.uploads.add(upload);
+    void upload.finally(() => recording.uploads.delete(upload));
   };
 
   return recorder;
 }
 
-function stop(): void {
-  if (!active) return;
+/** Stop recording, and do not return until every chunk has been uploaded. */
+async function stop(): Promise<StopResult> {
+  if (!active) return { uploaded: 0, failed: 0 };
 
-  for (const recorder of active.recorders) {
-    if (recorder.state !== 'inactive') recorder.stop();
-  }
-  for (const stream of active.streams) {
+  const recording = active;
+  active = null; // no further chunks can be attributed to this recording
+
+  // `MediaRecorder.stop()` emits one final blob, and it does so *asynchronously*.
+  // Waiting for each recorder's own stop event is what guarantees that last blob
+  // has been through `ondataavailable` — and is therefore in `uploads` — before we
+  // wait on the uploads themselves. Skip this and the final few seconds of the
+  // meeting, which is usually where the decisions get restated, never arrive.
+  await Promise.all(recording.recorders.map(stopRecorder));
+  await Promise.all([...recording.uploads]);
+
+  for (const stream of recording.streams) {
     for (const track of stream.getTracks()) track.stop();
   }
-  void active.audioContext.close();
+  await recording.audioContext.close();
 
-  active = null;
+  return { uploaded: recording.uploaded, failed: recording.failed };
+}
+
+/** Resolves once the recorder has emitted its final blob and gone inactive. */
+function stopRecorder(recorder: MediaRecorder): Promise<void> {
+  if (recorder.state === 'inactive') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    recorder.addEventListener('stop', () => resolve(), { once: true });
+    recorder.stop();
+  });
 }

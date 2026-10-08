@@ -1,0 +1,38 @@
+{
+  "title": "Example sync (synthetic)",
+  "date": "2026-05-14",
+  "language": "en",
+  "local_user": "Harman",
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 3400,
+      "speaker": "Harman",
+      "text": "Right, let's start with the chroma DB migration. Priya?"
+    },
+    {
+      "start_ms": 3600,
+      "end_ms": 7000,
+      "speaker": "SPEAKER_00",
+      "text": "I'll take the migration. I can have it done by Friday."
+    },
+    {
+      "start_ms": 7200,
+      "end_ms": 11800,
+      "speaker": "SPEAKER_01",
+      "text": "What about the Cooperia dashboard? Is anyone actually looking at that one yet?"
+    },
+    {
+      "start_ms": 12000,
+      "end_ms": 14200,
+      "speaker": "SPEAKER_01",
+      "text": "That's blocked on the API keys."
+    },
+    {
+      "start_ms": 14400,
+      "end_ms": 17000,
+      "speaker": "Harman",
+      "text": "Okay, I'll chase the keys today."
+    }
+  ]
+}

@@ -12,7 +12,10 @@ import type {
   Participant,
   Platform,
   Speaker,
+  SpeakerCluster,
   SpeakerEvent,
+  SpeakerMapping,
+  SpeakerResolution,
   Track,
   TranscriptSegment,
 } from './types';
@@ -67,6 +70,26 @@ export async function uploadChunk(
   if (!res.ok) throw new Error(`Chunk upload failed: ${res.status}`);
 }
 
+/**
+ * Merge the roster as it looks now into the meeting.
+ *
+ * Additive on the server: it creates people it has not seen and leaves everyone
+ * else alone, so this is safe to call as often as the adapter reads the page.
+ */
+export async function postParticipants(
+  meetingId: string,
+  participants: Participant[],
+): Promise<void> {
+  if (participants.length === 0) return;
+  await post(`/recordings/meetings/${meetingId}/participants`, {
+    participants: participants.map((p) => ({
+      display_name: p.displayName,
+      external_ref: p.externalRef,
+      is_local_user: p.isLocalUser,
+    })),
+  });
+}
+
 /** Post a batch of active-speaker intervals observed in the meeting UI. */
 export async function postSpeakerEvents(
   meetingId: string,
@@ -79,6 +102,7 @@ export async function postSpeakerEvents(
       speaker_external_ref: e.speakerExternalRef,
       start_ms: e.startMs,
       end_ms: e.endMs,
+      ...(e.source ? { source: e.source } : {}),
     })),
   });
 }
@@ -100,6 +124,84 @@ export async function listMeetings(limit = 20): Promise<Meeting[]> {
 
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   return toMeeting(await get<RawMeeting>(`/meetings/${meetingId}`));
+}
+
+/** Rename a meeting. Returns the updated meeting. */
+export async function renameMeeting(meetingId: string, title: string): Promise<Meeting> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+  return toMeeting((await res.json()) as RawMeeting);
+}
+
+/** Permanently delete a meeting and its audio. A 404 is treated as success —
+ *  the goal state (gone) is already true. */
+export async function deleteMeeting(meetingId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`delete failed: ${res.status}`);
+}
+
+/** Re-run minutes generation over the existing transcript. Queues a new job and
+ *  writes a new minutes version rather than overwriting the old one.
+ *
+ *  A 409 means the meeting still has unnamed speakers. That is the one failure
+ *  here a user can actually act on, so its message is surfaced rather than
+ *  flattened into a status code. */
+export async function regenerateMinutes(meetingId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/meetings/${meetingId}/minutes/regenerate`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, 'regenerate'));
+}
+
+/* --- Speaker mapping --- */
+
+/**
+ * The unnamed voices in a meeting, and the participants they might be.
+ *
+ * Diarization can separate voices but cannot name them, so a diarized meeting
+ * pauses before the minutes and waits for a human to answer this. Returns empty
+ * clusters for a meeting with nothing outstanding, which is the normal state and
+ * not worth a 404.
+ */
+export async function getSpeakerMapping(meetingId: string): Promise<SpeakerMapping> {
+  const raw = await get<RawSpeakerMapping>(`/meetings/${meetingId}/speaker-mapping`);
+  return toSpeakerMapping(raw);
+}
+
+/**
+ * Say who a cluster is: a known participant, a name, or nobody at all.
+ *
+ * Returns the mapping state *after* the change rather than the row that changed,
+ * because resolving the last cluster queues the minutes — the interesting result
+ * is about the meeting, not the speaker.
+ */
+export async function resolveSpeaker(
+  meetingId: string,
+  speakerId: string,
+  resolution: SpeakerResolution,
+): Promise<SpeakerMapping> {
+  const res = await fetch(
+    `${BASE_URL}/meetings/${meetingId}/speakers/${speakerId}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toRawResolution(resolution)),
+    },
+  );
+  if (!res.ok) throw new Error(await errorMessage(res, 'resolve speaker'));
+  return toSpeakerMapping((await res.json()) as RawSpeakerMapping);
+}
+
+function toRawResolution(resolution: SpeakerResolution): Record<string, unknown> {
+  if ('targetSpeakerId' in resolution) {
+    return { target_speaker_id: resolution.targetSpeakerId };
+  }
+  if ('displayName' in resolution) return { display_name: resolution.displayName };
+  return { ignore: true };
 }
 
 export async function getTranscript(meetingId: string): Promise<TranscriptSegment[]> {
@@ -148,6 +250,52 @@ export async function getMinutes(meetingId: string): Promise<Minutes | null> {
   };
 }
 
+export interface AnswerCitation {
+  meetingId: string;
+  meetingTitle: string | null;
+  speaker: string | null;
+  startMs: number;
+  text: string;
+}
+
+export interface MeetingAnswer {
+  answer: string;
+  citations: AnswerCitation[];
+}
+
+/** Ask about one meeting. The server filters retrieval before the LLM sees it. */
+export async function askMeetingQuestion(
+  meetingId: string,
+  question: string,
+): Promise<MeetingAnswer> {
+  const res = await fetch(`${BASE_URL}/qa`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, meeting_id: meetingId }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, 'answer question'));
+  const raw = (await res.json()) as {
+    answer: string;
+    citations: {
+      meeting_id: string;
+      meeting_title: string | null;
+      speaker: string | null;
+      start_ms: number;
+      text: string;
+    }[];
+  };
+  return {
+    answer: raw.answer,
+    citations: raw.citations.map((citation) => ({
+      meetingId: citation.meeting_id,
+      meetingTitle: citation.meeting_title,
+      speaker: citation.speaker,
+      startMs: citation.start_ms,
+      text: citation.text,
+    })),
+  };
+}
+
 /* --- Wire types and mapping --- */
 
 interface RawSpeaker {
@@ -155,6 +303,7 @@ interface RawSpeaker {
   display_name: string;
   source: Speaker['source'];
   is_local_user: boolean;
+  is_excluded: boolean;
 }
 
 interface RawMeeting {
@@ -179,6 +328,36 @@ interface RawSegment {
   text_en: string | null;
   speaker_id: string | null;
   speaker_source: TranscriptSegment['speakerSource'];
+}
+
+interface RawSpeakerCluster {
+  id: string;
+  display_name: string;
+  segment_count: number;
+  total_ms: number;
+  samples: string[];
+}
+
+interface RawSpeakerMapping {
+  clusters: RawSpeakerCluster[];
+  candidates: RawSpeaker[];
+  minutes_queued: boolean;
+}
+
+function toSpeakerMapping(raw: RawSpeakerMapping): SpeakerMapping {
+  return {
+    clusters: raw.clusters.map(
+      (c): SpeakerCluster => ({
+        id: c.id,
+        displayName: c.display_name,
+        segmentCount: c.segment_count,
+        totalMs: c.total_ms,
+        samples: c.samples,
+      }),
+    ),
+    candidates: raw.candidates.map(toSpeaker),
+    minutesQueued: raw.minutes_queued,
+  };
 }
 
 interface RawMinutes {
@@ -206,14 +385,38 @@ function toMeeting(raw: RawMeeting): Meeting {
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
     sourceLanguage: raw.source_language,
-    speakers: raw.speakers.map((s) => ({
-      id: s.id,
-      displayName: s.display_name,
-      source: s.source,
-      isLocalUser: s.is_local_user,
-    })),
+    speakers: raw.speakers.map(toSpeaker),
     jobs: raw.jobs,
   };
+}
+
+function toSpeaker(raw: RawSpeaker): Speaker {
+  return {
+    id: raw.id,
+    displayName: raw.display_name,
+    source: raw.source,
+    isLocalUser: raw.is_local_user,
+    isExcluded: raw.is_excluded,
+  };
+}
+
+/**
+ * Turn a failed response into something worth showing a user.
+ *
+ * FastAPI puts the reason in `detail`, and for this API the reason is often the
+ * whole point — "3 speakers still need identifying" tells someone what to do,
+ * where "409" tells them to file a bug. Falls back to the status code when the
+ * body is not the shape we expect, which is what a crashed or proxied server
+ * tends to return.
+ */
+async function errorMessage(res: Response, action: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    if (typeof body.detail === 'string') return body.detail;
+  } catch {
+    // Not JSON. The status code is all we have.
+  }
+  return `${action} failed: ${res.status}`;
 }
 
 async function get<T>(path: string): Promise<T> {

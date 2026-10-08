@@ -25,5 +25,16 @@ storage/
 chroma/
 models/
 
-# Evaluation fixtures contain real meeting audio — never commit
-eval/datasets/
+# Evaluation fixtures contain real meeting audio — never commit.
+#
+# `example/` is the one exception: it is synthetic, holds no audio, and is what
+# lets the scorer prove itself without a GPU. The suffix rules below are
+# belt-and-braces — if a real recording is ever dropped into example/, the
+# exception must not become the hole that publishes it.
+eval/datasets/*
+!eval/datasets/example/
+eval/datasets/example/*.webm
+eval/datasets/example/*.wav
+eval/datasets/example/*.m4a
+eval/datasets/example/*.ogg
+eval/datasets/example/*.mp3

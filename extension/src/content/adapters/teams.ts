@@ -19,6 +19,12 @@ export class TeamsAdapter implements MeetingAdapter {
     return document.title || null;
   }
 
+  isInCall(): boolean {
+    // Unimplemented, like the rest of this adapter: no reliable in-call selector
+    // yet, so no auto-record nudge on Teams and recording stays a manual click.
+    return false;
+  }
+
   observe(_onTurn: (turn: ObservedTurn) => void): void {
     // No timeline emitted; the backend falls back to diarization.
   }

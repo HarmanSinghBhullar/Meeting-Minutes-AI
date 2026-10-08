@@ -50,28 +50,44 @@ class Settings(BaseSettings):
     whisper_compute_type: str = Field(default="int8_float16", alias="WHISPER_COMPUTE_TYPE")
     whisper_vad_filter: bool = Field(default=True, alias="WHISPER_VAD_FILTER")
 
-    # --- Diarization (fallback path) ---
+    # --- Diarization ---
+    #: The only source of speaker attribution for the tab track. Gated models:
+    #: HUGGINGFACE_TOKEN is required, and the licences must be accepted first.
     huggingface_token: str | None = Field(default=None, alias="HUGGINGFACE_TOKEN")
     pyannote_model: str = Field(
         default="pyannote/speaker-diarization-3.1", alias="PYANNOTE_MODEL"
     )
+    #: pyannote defaults to CPU if nobody says otherwise, which costs tens of
+    #: minutes on a long meeting. Whisper has unloaded by the time diarization
+    #: runs, so there is no contention for the card.
+    pyannote_device: str = Field(default="cuda", alias="PYANNOTE_DEVICE")
+    #: Turning this off does not degrade attribution — it removes it. Every remote
+    #: speaker becomes "Unknown", and the minutes lose their owners. It exists for
+    #: running the pipeline on a machine with no GPU and no HF token at all.
     diarization_enabled: bool = Field(default=True, alias="DIARIZATION_ENABLED")
 
     # --- LLM ---
-    #: "openai" or "anthropic". The minutes and grounding code never names a
-    #: provider — everything that makes the output trustworthy sits above the
-    #: provider interface, so this is a genuine one-line switch.
-    llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
+    #: "groq", "google", "openai", or "anthropic". The minutes and grounding code
+    #: never names a provider — everything that makes the output trustworthy sits
+    #: above the provider interface, so this is a genuine one-line switch.
+    llm_provider: str = Field(default="groq", alias="LLM_PROVIDER")
 
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
 
     #: Model ids are provider-specific — change these when you change provider.
     #: The extractor decides what counts as a commitment, which is the harder
-    #: judgement; the grounding pass answers a narrow yes/no question about lines
-    #: it can see, so it can run on something cheaper.
-    minutes_model: str = Field(default="gpt-5.6", alias="MINUTES_MODEL")
-    grounding_model: str = Field(default="gpt-5.6", alias="GROUNDING_MODEL")
+    #: judgement (so it gets the 70B model); the grounding pass answers a narrow
+    #: yes/no question about lines it can see, so it can run on the fast 8B one.
+    minutes_model: str = Field(default="openai/gpt-oss-120b", alias="MINUTES_MODEL")
+    grounding_model: str = Field(default="openai/gpt-oss-20b", alias="GROUNDING_MODEL")
+    #: Translation is line-wise transduction, but quality still matters for names
+    #: and code-switching, so it keeps the larger model rather than the 8B.
+    translation_model: str = Field(
+        default="openai/gpt-oss-120b", alias="TRANSLATION_MODEL"
+    )
 
     # --- RAG ---
     chroma_dir: Path = Field(default=Path("./chroma"), alias="CHROMA_DIR")

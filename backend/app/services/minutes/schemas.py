@@ -51,9 +51,15 @@ class ExtractionResult(BaseModel):
 
 
 class SummaryResult(BaseModel):
-    """The prose overview, written once over the whole meeting."""
+    """The point-wise minutes, written once over the whole meeting."""
 
-    summary: str = Field(description="A short prose overview of what the meeting covered.")
+    points: list[str] = Field(
+        description=(
+            "3-6 concise points recording what the meeting covered and where it "
+            "landed, most important first. Each point is one short sentence. Do "
+            "not list action items — they are captured separately."
+        )
+    )
 
 
 class GroundingVerdict(BaseModel):

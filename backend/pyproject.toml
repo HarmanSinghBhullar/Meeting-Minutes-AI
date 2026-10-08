@@ -29,20 +29,54 @@ dependencies = [
     "nvidia-cublas-cu12; sys_platform == 'win32'",
     "nvidia-cudnn-cu12; sys_platform == 'win32'",
 
-    # LLM (minutes, grounding, translation). Both are installed; which one runs
-    # is the LLM_PROVIDER setting. They are small, pure-Python HTTP clients —
-    # carrying the unused one costs nothing and keeps provider A/B testing on the
-    # evaluation set a config change rather than a reinstall.
+    # LLM (minutes, grounding, translation). All are installed; which one runs is
+    # the LLM_PROVIDER setting. They are small, pure-Python HTTP clients — carrying
+    # the unused ones costs nothing and keeps provider A/B testing on the evaluation
+    # set a config change rather than a reinstall.
+    "groq>=0.11",
+    "google-genai>=1.0",
     "openai>=1.60",
     "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
-# Kept separate: pyannote is the fallback attribution path and pulls in torch.
-# Install only if you need diarization for non-browser (e.g. conference room) audio.
+# Required for the worker, optional for the API — which is the only reason it is
+# an extra rather than a dependency. pyannote is now the sole source of speaker
+# attribution (the DOM active-speaker scrape it replaced broke silently whenever a
+# platform reskinned), so a worker without this transcribes every remote speaker
+# as "Unknown". It pulls torch, which the API process has no use for.
+#   pip install -e ".[diarization]"
 diarization = [
-    "pyannote.audio>=3.3",
-    "torch>=2.4",
+    # Every bound here was paid for by an install that broke. Do not loosen one
+    # without reading why it is there.
+    #
+    # pyannote.audio <4: 4.x renamed `Pipeline.from_pretrained(use_auth_token=)`
+    # to `token=`, and moved audio I/O onto torchcodec, which needs FFmpeg's
+    # *shared libraries* on the DLL search path — a second system dependency
+    # beyond the ffmpeg binary this project already asks for, and one that fails
+    # at import rather than at first use. Moving to 4.x is a deliberate upgrade
+    # with its own testing, not something an unpinned `>=3.3` may do by itself.
+    "pyannote.audio>=3.3,<4",
+    # torch <2.6: 2.6 flipped `torch.load(weights_only=)` to True by default, and
+    # pyannote 3.x's checkpoints pickle globals (TorchVersion, lightning types)
+    # that the safe unpickler rejects — so the model fails to load at all.
+    # Allowlisting the globals one at a time does not converge; the version bound
+    # does. (torchaudio 2.9 separately removed `torchaudio.AudioMetaData`, which
+    # pyannote 3.x imports at module scope, so <2.6 clears that too.)
+    # torchaudio must match the torch it was built against.
+    "torch>=2.4,<2.6",
+    "torchaudio>=2.4,<2.6",
+    # huggingface_hub <1: 1.0 removed the `use_auth_token` argument that
+    # pyannote 3.x still passes to hf_hub_download. Fails with a TypeError the
+    # moment it tries to fetch the gated weights.
+    "huggingface_hub>=0.23,<1",
+    # speechbrain 1.0.x: pyannote's embedding model runs on speechbrain, and 1.1
+    # restructured its package into lazy submodules. Anything that introspects
+    # loaded modules (pyannote does, on the way to the checkpoint) trips the lazy
+    # `speechbrain.integrations.k2_fsa` import, which needs an optional dependency
+    # nobody installed, and the pipeline dies on an ImportError from a module it
+    # never asked for.
+    "speechbrain>=1.0,<1.1",
 ]
 
 # RAG is the phase-2 add-on.
@@ -70,6 +104,13 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+# `conftest` is this repo's own test helper module, imported bare rather than as
+# `tests.conftest` (pyannote.pipeline squats on the top-level `tests` name — see
+# the note in tests/test_speaker_mapping.py). Without this, isort files it under
+# third-party and shuffles it in among pytest and sqlalchemy.
+known-local-folder = ["conftest"]
 
 [tool.mypy]
 python_version = "3.11"
